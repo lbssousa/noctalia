@@ -64,6 +64,8 @@
 #include "scripting/plugin_panel_shell.h"
 #include "scripting/plugin_registry.h"
 #include "scripting/plugin_runtime_context.h"
+#include "security/prompt/secret_prompt_poll_source.h"
+#include "security/prompt/secret_prompt_service.h"
 #include "shell/clipboard/clipboard_panel.h"
 #include "shell/clipboard/clipboard_paste.h"
 #include "shell/control_center/control_center_panel.h"
@@ -284,6 +286,8 @@ void Application::run(std::function<void()> startupReadyCallback) {
 #endif
 
   m_polkitInitTimer.start(std::chrono::milliseconds(1000), [this]() { syncPolkitAgent(); });
+  syncSecretPromptService();
+  m_configService.addReloadCallback([this]() { syncSecretPromptService(); });
 
   m_mainLoop = std::make_unique<MainLoop>(m_wayland, m_bar, [this]() { return currentPollSources(); });
   if (startupReadyCallback) {

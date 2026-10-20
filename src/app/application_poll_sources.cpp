@@ -8,6 +8,8 @@
 #include "pipewire/pipewire_poll_source.h"
 #include "pipewire/pipewire_spectrum_poll_source.h"
 #include "pipewire/wireplumber_mixer.h"
+#include "security/prompt/secret_prompt_poll_source.h"
+#include "security/prompt/secret_prompt_service.h"
 #include "system/brightness_poll_source.h"
 
 std::vector<PollSource*> Application::currentPollSources() {
@@ -51,6 +53,9 @@ std::vector<PollSource*> Application::currentPollSources() {
   }
   if (m_polkitPollSource != nullptr) {
     sources.push_back(m_polkitPollSource.get());
+  }
+  if (m_secretPromptPollSource != nullptr) {
+    sources.push_back(m_secretPromptPollSource.get());
   }
   if (m_brightnessPollSource != nullptr) {
     sources.push_back(m_brightnessPollSource.get());

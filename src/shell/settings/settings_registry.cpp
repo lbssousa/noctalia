@@ -1740,6 +1740,16 @@ namespace settings {
         ToggleSetting{cfg.shell.polkitAgent}, "auth password"
     ));
     entries.push_back(makeEntry(
+        SettingsSection::Security, "authentication", tr("settings.schema.shell.pinentry.label"),
+        tr("settings.schema.shell.pinentry.description"), {"shell", "pinentry"}, ToggleSetting{cfg.shell.pinentry},
+        "gpg gnupg pinentry passphrase pin key"
+    ));
+    entries.push_back(makeEntry(
+        SettingsSection::Security, "authentication", tr("settings.schema.shell.ssh-askpass.label"),
+        tr("settings.schema.shell.ssh-askpass.description"), {"shell", "ssh_askpass"},
+        ToggleSetting{cfg.shell.sshAskpass}, "ssh askpass git passphrase key"
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::Security, "authentication", tr("settings.schema.shell.password-style.label"),
         tr("settings.schema.shell.password-style.description"), {"shell", "password_style"},
         asSegmented(enumSelect(kPasswordMaskStyles, cfg.shell.passwordMaskStyle)), "polkit lock mask"

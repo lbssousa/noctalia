@@ -616,6 +616,8 @@ _noctalia_sources = files(
   'src/scripting/plugin_bindings.cpp',
   'src/security/encrypted_file_store.cpp',
   'src/security/secret_store.cpp',
+  'src/security/prompt/assuan_session.cpp',
+  'src/security/prompt/secret_prompt_service.cpp',
   'src/security/secure_buffer.cpp',
   'src/security/storage_key_provider.cpp',
   'src/system/battery_warning_monitor.cpp',
@@ -710,6 +712,7 @@ _noctalia_sources = files(
   'src/shell/panel/persistent_panel_host.cpp',
   'src/shell/panel/plugin_panel.cpp',
   'src/shell/polkit/polkit_panel.cpp',
+  'src/shell/secret_prompt/secret_prompt_panel.cpp',
   'src/shell/session/session_action_meta.cpp',
   'src/shell/session/session_action_runner.cpp',
   'src/shell/session/session_ipc.cpp',
@@ -1142,6 +1145,30 @@ noctalia_exe = executable('noctalia',
   install: true,
 )
 
+# gpg-agent's pinentry-program and SSH_ASKPASS. Small clients of the shell's secret-prompt
+# sockets: no Wayland, rendering or D-Bus dependencies.
+_prompt_client_lib = static_library('noctalia_prompt_client',
+  sources: files('src/prompt_client/prompt_client.cpp', 'src/security/prompt/assuan_session.cpp'),
+  include_directories: _noctalia_inc,
+  cpp_args: _noctalia_cpp_args,
+)
+
+executable('noctalia-pinentry',
+  sources: files('src/prompt_client/pinentry_main.cpp'),
+  link_with: _prompt_client_lib,
+  include_directories: _noctalia_inc,
+  cpp_args: _noctalia_cpp_args,
+  install: true,
+)
+
+executable('noctalia-askpass',
+  sources: files('src/prompt_client/askpass_main.cpp'),
+  link_with: _prompt_client_lib,
+  include_directories: _noctalia_inc,
+  cpp_args: _noctalia_cpp_args,
+  install: true,
+)
+
 install_subdir('assets',
   install_dir: get_option('datadir') / 'noctalia',
   exclude_files: ['dev.noctalia.Noctalia.desktop'],
@@ -1177,6 +1204,7 @@ if build_tests
     'annotation_raster',
     'animation_manager',
     'app_identity',
+    'assuan_session',
     'audio_glyphs',
     'audio_media_class',
     'audio_route_selection',
@@ -1279,6 +1307,7 @@ if build_tests
     'process',
     'scheme',
     'scrollbar_geometry',
+    'secret_prompt_service',
     'secret_store',
     'security_primitives',
     'state_store',
@@ -1313,6 +1342,13 @@ if build_tests
     'workspace_alert_service',
     'workspaces_widget',
   ]
+
+  test('askpass_plan', executable('askpass_plan_test',
+    sources: files('tests/askpass_plan_test.cpp'),
+    link_with: _prompt_client_lib,
+    include_directories: _noctalia_inc,
+    override_options: ['b_ndebug=false'],
+  ))
 
   foreach test_name : _cpp_test_names
     if test_name == 'plugin_git_export' and not git_program.found()

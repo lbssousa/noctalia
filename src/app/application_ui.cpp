@@ -62,6 +62,8 @@
 #include "scripting/plugin_panel_shell.h"
 #include "scripting/plugin_registry.h"
 #include "scripting/plugin_runtime_context.h"
+#include "security/prompt/secret_prompt_poll_source.h"
+#include "security/prompt/secret_prompt_service.h"
 #include "shell/clipboard/clipboard_panel.h"
 #include "shell/clipboard/clipboard_paste.h"
 #include "shell/control_center/control_center_panel.h"
@@ -69,6 +71,7 @@
 #include "shell/launcher/launcher_panel.h"
 #include "shell/panel/plugin_panel.h"
 #include "shell/polkit/polkit_panel.h"
+#include "shell/secret_prompt/secret_prompt_panel.h"
 #include "shell/session/session_ipc.h"
 #include "shell/session/session_panel.h"
 #include "shell/setup_wizard/setup_wizard_panel.h"
@@ -343,6 +346,10 @@ void Application::initLockScreenAndSession() {
       [this]() {
         m_idleGraceOverlay.hide();
         m_lockscreenWidgetsController.onLockStateChanged();
+        // A passphrase prompt must not wait behind the lock screen.
+        if (m_secretPromptService != nullptr) {
+          m_secretPromptService->cancelAll();
+        }
         m_idleManager.setSessionLocked(true);
         m_screenTimeService.setSessionLocked(true);
         m_hookManager.fire(HookKind::SessionLocked);
@@ -731,6 +738,9 @@ void Application::initPanelManagerAndPanels() {
   m_panelManager.registerPanel("tray-drawer", std::make_unique<TrayDrawerPanel>(m_trayService.get(), &m_configService));
   m_panelManager.registerPanel("polkit", std::make_unique<PolkitPanel>(&m_configService, [this]() {
                                  return m_polkitAgent.get();
+                               }));
+  m_panelManager.registerPanel("secret-prompt", std::make_unique<SecretPromptPanel>(&m_configService, [this]() {
+                                 return m_secretPromptService.get();
                                }));
   m_panelManager.registerPanel("setup-wizard", std::make_unique<SetupWizardPanel>(&m_configService, &m_wayland));
 
