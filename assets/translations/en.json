@@ -21,8 +21,16 @@
       "authenticate": "Authenticate",
       "authenticating": "Authenticating…",
       "default-message": "Authentication required",
+      "fingerprint": {
+        "detail": "Place your finger on the fingerprint reader",
+        "title": "Scan your fingerprint"
+      },
       "invalid-password": "Invalid password",
       "password-placeholder": "Password",
+      "security-key": {
+        "detail": "Touch the key's contact when its light blinks",
+        "title": "Touch your security key"
+      },
       "title": "Authentication Required"
     },
     "secret-prompt": {

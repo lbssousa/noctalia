@@ -21,8 +21,16 @@
       "authenticate": "Autenticar",
       "authenticating": "Autenticando...",
       "default-message": "Autenticação necessária",
+      "fingerprint": {
+        "detail": "Encoste o dedo no leitor de impressão digital",
+        "title": "Use sua impressão digital"
+      },
       "invalid-password": "Senha inválida",
       "password-placeholder": "Senha",
+      "security-key": {
+        "detail": "Toque no contato da chave quando a luz piscar",
+        "title": "Toque na sua chave de segurança"
+      },
       "title": "Autenticação necessária"
     },
     "secret-prompt": {

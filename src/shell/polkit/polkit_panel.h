@@ -1,5 +1,6 @@
 #pragma once
 
+#include "shell/auth_text.h"
 #include "shell/panel/panel.h"
 #include "system/icon_resolver.h"
 
@@ -44,6 +45,7 @@ private:
   void cancelAuth();
   bool handleInputKeyEvent(std::uint32_t sym, std::uint32_t modifiers);
   void resolveIcon(Renderer& renderer, const PolkitRequest& request);
+  void updateCue(auth_text::AuthCue cue, bool isError, const std::string& rawMessage);
 
   ConfigService* m_config = nullptr;
   std::function<PolkitAgent*()> m_agentProvider;
@@ -59,10 +61,15 @@ private:
   Node* m_iconContainer = nullptr;
   Image* m_icon = nullptr;
   Glyph* m_fallbackIcon = nullptr;
+  Flex* m_cueBox = nullptr;
+  Glyph* m_cueGlyph = nullptr;
+  Label* m_cueTitle = nullptr;
+  Label* m_cueDetail = nullptr;
   IconResolver m_iconResolver;
   std::string m_lastIconName;
   bool m_iconResolved = false;
   bool m_lastResponseRequired = false;
+  auth_text::AuthCue m_lastCue = auth_text::AuthCue::None;
   std::string m_trackedRequestCookie;
   bool m_hasTrackedRequest = false;
 };
