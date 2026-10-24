@@ -938,8 +938,11 @@
     "password-cleared": "Senha apagada",
     "password-placeholder": "Senha",
     "ready": "Digite sua senha e pressione Enter.",
+    "security-key-pin-failed": "PIN incorreto, ou a chave não foi tocada a tempo",
+    "security-key-pin-placeholder": "PIN da chave de segurança",
     "security-key-touch": "Toque na sua chave de segurança",
     "unlocked": "Destrancado",
+    "use-password": "Usar senha",
     "waiting": "Aguardando confirmação de tranca…"
   },
   "notifications": {
@@ -2659,7 +2662,7 @@
           "label": "Monitores"
         },
         "security-key": {
-          "description": "Desbloquear com um toque em uma chave de segurança FIDO2 (pam_u2f), junto com a senha digitada",
+          "description": "Desbloquear com um toque em uma chave de segurança FIDO2 (pam_u2f), depois da digital e antes da senha",
           "label": "Desbloquear com Chave de Segurança"
         },
         "tint-color": {

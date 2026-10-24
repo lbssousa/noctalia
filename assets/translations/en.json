@@ -938,8 +938,10 @@
     "password-cleared": "Password cleared",
     "password-placeholder": "Password",
     "ready": "Type your password and press Enter.",
-    "security-key-touch": "Touch your security key",
+    "security-key-pin-failed": "Wrong PIN, or the key wasn't touched in time",
+    "security-key-pin-placeholder": "Security key PIN",
     "unlocked": "Unlocked",
+    "use-password": "Use password",
     "waiting": "Waiting for lock confirmation…"
   },
   "notifications": {
@@ -2665,7 +2667,7 @@
           "label": "Monitors"
         },
         "security-key": {
-          "description": "Unlock with a touch on a FIDO2 security key (pam_u2f), alongside password entry",
+          "description": "Unlock with a touch on a FIDO2 security key (pam_u2f), after the fingerprint and before the password",
           "label": "Security Key Unlock"
         },
         "tint-color": {

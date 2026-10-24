@@ -38,6 +38,11 @@ namespace {
 
   constexpr Logger kLog("lockscreen");
 
+  using auth_text::AuthCue;
+
+  // No fingerprint read for this long: move on to the security key (pam_fprintd: 3 x 10 s).
+  constexpr auto kFingerprintStageTimeout = std::chrono::seconds(30);
+
   // CLOCK_BOOTTIME counts suspend time but is monotonic, so realtime adjustments
   // can never push an expired grace deadline back into the future.
   std::int64_t bootTimeMillis() {
@@ -137,6 +142,7 @@ bool LockScreen::initialize(
     m_fingerprint->setStatusCallback([this](const std::string& message, bool isError) {
       handleFingerprintStatus(message, isError);
     });
+    m_fingerprint->setUnavailableCallback([this]() { advanceAuthStage(AuthCue::Fingerprint); });
   }
   m_securityKey = std::make_unique<SecurityKeyAuthenticator>();
   m_securityKey->setAuthenticatedCallback([this]() {
@@ -145,9 +151,36 @@ bool LockScreen::initialize(
     updatePromptOnSurfaces();
     unlock();
   });
-  // Same rules as the fingerprint status: never over a password being typed.
-  m_securityKey->setStatusCallback([this](const std::string& message, bool isError) {
-    handleFingerprintStatus(message, isError);
+  // A key plugged in while the password stage waits (nothing typed yet) takes over.
+  m_securityKey->setCueCallback([this]() {
+    if (m_locked && !m_unlocking && m_authStage == AuthCue::None && m_password.empty() && !m_authenticating) {
+      enterAuthStage(AuthCue::SecurityKey, true);
+    }
+  });
+  m_securityKey->setGaveUpCallback([this](bool /*cued*/) {
+    if (m_authStage != AuthCue::SecurityKey) {
+      return;
+    }
+    if (m_keyPinTried) {
+      // A wrong PIN and a touch that never came look the same from here.
+      m_keyPinTried = false;
+      enterAuthStage(AuthCue::None);
+      m_status = i18n::tr("lockscreen.security-key-pin-failed");
+      m_statusIsError = true;
+      updatePromptOnSurfaces();
+      return;
+    }
+    advanceAuthStage(AuthCue::SecurityKey);
+  });
+  // A registered key plugged in wants its PIN: in the security key stage, or in
+  // the password stage with nothing typed yet.
+  m_securityKey->setPinCallback([this]() {
+    if (!m_locked || m_unlocking || m_authenticating) {
+      return;
+    }
+    if (m_authStage == AuthCue::SecurityKey || (m_authStage == AuthCue::None && !m_keyPin && m_password.empty())) {
+      enterKeyPinEntry();
+    }
   });
   return true;
 }
@@ -292,6 +325,8 @@ void LockScreen::unlock() {
   invalidatePendingAuthentication();
   stopFingerprint();
   stopSecurityKey();
+  m_fingerprintStageTimer.stop();
+  ++m_authStageGeneration;
 
   if (m_locked) {
     m_unlocking = true;
@@ -341,6 +376,9 @@ void LockScreen::finishUnlock() {
 
   m_lockPending = false;
   m_locked = false;
+  m_authStage = AuthCue::None;
+  m_keyPin = false;
+  m_keyPinTried = false;
   clearSensitiveString(m_password);
   m_status.clear();
   m_statusIsError = false;
@@ -565,6 +603,15 @@ void LockScreen::onKeyboardEvent(const KeyboardEvent& event) {
     return;
   }
 
+  // No password field while the fingerprint or the security key is asked for:
+  // Enter (or Space) is the "use password" button, other keys do nothing.
+  if (m_authStage != AuthCue::None) {
+    if (KeybindMatcher::matches(KeybindAction::Validate, event.sym, event.modifiers)) {
+      enterAuthStage(AuthCue::None);
+    }
+    return;
+  }
+
   // The password field always owns plain printable keys; Space is a Validate
   // chord but must type a space, not submit (passwords may contain spaces).
   if (!isPlainPrintableKey(event.utf32, event.modifiers, event.preedit)
@@ -582,6 +629,10 @@ void LockScreen::onKeyboardEvent(const KeyboardEvent& event) {
     return;
   }
 
+  if (cancel && m_keyPin && m_password.empty()) {
+    leaveKeyPinEntry();
+    return;
+  }
   if (cancel) {
     clearSensitiveString(m_password);
     m_status = i18n::tr("lockscreen.password-cleared");
@@ -656,6 +707,10 @@ void LockScreen::onSystemResumed() {
   resetGracePeriod();
   cancelPendingAfterLocked();
   cancelOutputPowerOff();
+  // Back to the first method: whoever comes back to the machine starts over.
+  if (m_locked && !m_unlocking && !m_authenticating) {
+    beginAuthSequence();
+  }
 }
 
 bool LockScreen::isSessionLocked() const noexcept { return m_locked; }
@@ -906,10 +961,8 @@ void LockScreen::handleLocked(void* data, ext_session_lock_v1* /*lock*/) {
 
   self->armSleepReadyTimeout();
 
-  self->updatePromptOnSurfaces();
   self->updateIndicatorsOnSurfaces();
-  self->startFingerprint();
-  self->startSecurityKey();
+  self->beginAuthSequence();
   kLog.info("session is locked");
   if (self->m_onSessionLocked) {
     self->m_onSessionLocked();
@@ -930,6 +983,11 @@ void LockScreen::handleFinished(void* data, ext_session_lock_v1* /*lock*/) {
   self->invalidatePendingAuthentication();
   self->stopFingerprint();
   self->stopSecurityKey();
+  self->m_fingerprintStageTimer.stop();
+  ++self->m_authStageGeneration;
+  self->m_authStage = AuthCue::None;
+  self->m_keyPin = false;
+  self->m_keyPinTried = false;
 
   if (self->m_lock != nullptr) {
     if (self->m_locked) {
@@ -1344,7 +1402,19 @@ void LockScreen::createInstance(const WaylandOutput& output) {
   surface->setOnCycleLayout([this] { cycleKeyboardLayout(); });
   surface->setOnPasswordChanged([this](const std::string& value) { handlePasswordEdited(value); });
   surface->setLoginBoxServices(m_sessionActions, m_mpris, m_weather, m_httpClient);
+  surface->setOnUsePassword([this]() {
+    if (!m_locked || m_unlocking) {
+      return;
+    }
+    if (m_authStage != AuthCue::None) {
+      enterAuthStage(AuthCue::None);
+    } else if (m_keyPin) {
+      leaveKeyPinEntry();
+    }
+  });
   surface->setPromptState(m_user, m_password, m_status, m_statusIsError, m_authenticating);
+  surface->setAuthStage(m_authStage);
+  surface->setKeyPinMode(m_keyPin);
   applyIndicatorsToSurface(*surface);
 
   surface->setBlackout(!isInteractiveOutput(output));
@@ -1402,6 +1472,8 @@ void LockScreen::clearInstances() { m_instances.clear(); }
 void LockScreen::updatePromptOnSurfaces() {
   for (auto& instance : m_instances) {
     instance.surface->setPromptState(m_user, m_password, m_status, m_statusIsError, m_authenticating);
+    instance.surface->setAuthStage(m_authStage);
+    instance.surface->setKeyPinMode(m_keyPin);
   }
 }
 
@@ -1473,7 +1545,11 @@ void LockScreen::handlePasswordEdited(const std::string& value) {
 }
 
 void LockScreen::tryAuthenticate() {
-  if (m_authenticating || !m_locked || m_unlocking) {
+  if (m_authenticating || !m_locked || m_unlocking || m_authStage != AuthCue::None) {
+    return;
+  }
+  if (m_keyPin) {
+    submitKeyPin();
     return;
   }
   if (m_password.empty()) {
@@ -1534,18 +1610,6 @@ void LockScreen::handleAuthResult(std::uint64_t generation, const PamAuthenticat
   m_status = result.message.empty() ? i18n::tr("lockscreen.authentication-failed") : result.message;
   m_statusIsError = true;
   updatePromptOnSurfaces();
-  startFingerprint();
-  startSecurityKey();
-}
-
-void LockScreen::startFingerprint() {
-  if (m_fingerprint == nullptr) {
-    return;
-  }
-  if (m_configService != nullptr && !m_configService->config().lockscreen.fingerprint) {
-    return;
-  }
-  m_fingerprint->start();
 }
 
 void LockScreen::stopFingerprint() {
@@ -1554,33 +1618,143 @@ void LockScreen::stopFingerprint() {
   }
 }
 
-void LockScreen::startSecurityKey() {
-  if (m_securityKey == nullptr) {
-    return;
-  }
-  if (m_configService != nullptr && !m_configService->config().lockscreen.securityKey) {
-    return;
-  }
-  // Keeps running while a typed password is checked: they don't share a device.
-  m_securityKey->start();
-}
-
 void LockScreen::stopSecurityKey() {
   if (m_securityKey != nullptr) {
     m_securityKey->stop();
   }
 }
 
+bool LockScreen::fingerprintEnabled() const {
+  return m_fingerprint != nullptr
+      && (m_configService == nullptr || m_configService->config().lockscreen.fingerprint);
+}
+
+bool LockScreen::securityKeyEnabled() const {
+  return m_securityKey != nullptr
+      && (m_configService == nullptr || m_configService->config().lockscreen.securityKey);
+}
+
+void LockScreen::beginAuthSequence() {
+  if (fingerprintEnabled()) {
+    enterAuthStage(AuthCue::Fingerprint);
+  } else if (securityKeyEnabled()) {
+    enterAuthStage(AuthCue::SecurityKey);
+  } else {
+    enterAuthStage(AuthCue::None);
+  }
+}
+
+void LockScreen::enterAuthStage(AuthCue stage, bool keyAlreadyCued) {
+  ++m_authStageGeneration;
+  m_authStage = stage;
+  if (m_keyPin) {
+    m_keyPin = false;
+    clearSensitiveString(m_password);
+  }
+  if (!keyAlreadyCued) {
+    m_keyPinTried = false;
+  }
+  m_status.clear();
+  m_statusIsError = false;
+  m_fingerprintStageTimer.stop();
+  // Restart even the current stage's authenticator: after a resume it must start over.
+  stopFingerprint();
+  if (!keyAlreadyCued) {
+    stopSecurityKey();
+  }
+  // Published before starting: an authenticator may report a status (or give up) right away.
+  updatePromptOnSurfaces();
+
+  switch (stage) {
+  case AuthCue::Fingerprint:
+    kLog.debug("auth stage: fingerprint");
+    m_fingerprintStageTimer.start(kFingerprintStageTimeout, [this]() { advanceAuthStage(AuthCue::Fingerprint); });
+    m_fingerprint->start();
+    break;
+  case AuthCue::SecurityKey:
+    kLog.debug("auth stage: security key");
+    if (!keyAlreadyCued) {
+      m_securityKey->start(false);
+    }
+    break;
+  case AuthCue::None:
+    kLog.debug("auth stage: password");
+    // Keeps running while a typed password is checked: they don't share a device.
+    if (securityKeyEnabled()) {
+      m_securityKey->start(true);
+    }
+    break;
+  }
+}
+
+void LockScreen::advanceAuthStage(AuthCue from) {
+  const std::weak_ptr<void> guard = m_aliveGuard;
+  const std::uint64_t generation = m_authStageGeneration;
+  // Deferred: authenticators report from inside their own start() and stop().
+  DeferredCall::callLater([this, guard, generation, from]() {
+    if (guard.expired() || generation != m_authStageGeneration || m_authStage != from || !m_locked || m_unlocking) {
+      return;
+    }
+    if (from == AuthCue::Fingerprint && securityKeyEnabled()) {
+      enterAuthStage(AuthCue::SecurityKey);
+    } else {
+      enterAuthStage(AuthCue::None);
+    }
+  });
+}
+
+void LockScreen::enterKeyPinEntry() {
+  // The password stage, with its hotplug watcher stopped: the PIN goes to one attempt.
+  enterAuthStage(AuthCue::None);
+  stopSecurityKey();
+  m_keyPin = true;
+  clearSensitiveString(m_password);
+  m_status.clear();
+  m_statusIsError = false;
+  updatePromptOnSurfaces();
+}
+
+void LockScreen::leaveKeyPinEntry() {
+  if (!m_keyPin) {
+    return;
+  }
+  // Back to the password, watching for keys again.
+  enterAuthStage(AuthCue::None);
+}
+
+void LockScreen::submitKeyPin() {
+  // Never an empty PIN: it would still use up one of the key's retries.
+  if (m_password.empty() || m_securityKey == nullptr) {
+    return;
+  }
+  if (m_wayland != nullptr) {
+    m_wayland->stopKeyRepeat();
+  }
+  std::string pin = m_password;
+  clearSensitiveString(m_password);
+  m_keyPin = false;
+  ++m_authStageGeneration;
+  m_authStage = AuthCue::SecurityKey;
+  m_keyPinTried = true;
+  m_status.clear();
+  m_statusIsError = false;
+  stopFingerprint();
+  m_fingerprintStageTimer.stop();
+  updatePromptOnSurfaces();
+  kLog.debug("auth stage: security key with PIN");
+  m_securityKey->startWithPin(std::move(pin));
+}
+
 void LockScreen::handleFingerprintStatus(const std::string& message, bool isError) {
-  if (!isActive()) {
+  if (!isActive() || m_authStage != AuthCue::Fingerprint) {
     return;
   }
-  // Don't clobber a password the user is typing.
-  if (!m_password.empty()) {
-    return;
+  // Any activity on the reader buys the stage more time.
+  if (m_fingerprintStageTimer.active()) {
+    m_fingerprintStageTimer.start(kFingerprintStageTimeout, [this]() { advanceAuthStage(AuthCue::Fingerprint); });
   }
-  // Empty message means verification disarmed; fall back to the idle prompt (rendered by the surface).
-  m_status = message.empty() ? std::string{} : message;
+  // Empty message means verification disarmed; the surface shows the instruction instead.
+  m_status = message;
   m_statusIsError = isError;
   updatePromptOnSurfaces();
 }

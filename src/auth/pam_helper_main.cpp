@@ -39,7 +39,16 @@ namespace {
     bool passwordSent = false;
     // kInfoFd when the shell asked for PAM_TEXT_INFO cues, else -1.
     int infoFd = -1;
+    // The security key service: a PIN prompt with no PIN in hand is refused, never answered empty.
+    bool securityKey = false;
   };
+
+  // Best effort: the shell may have stopped listening.
+  void sendInfo(const PamConversationData& data, char byte) {
+    if (data.infoFd >= 0) {
+      [[maybe_unused]] const ssize_t written = ::write(data.infoFd, &byte, 1);
+    }
+  }
 
   struct PamHandle {
     pam_handle_t* h = nullptr;
@@ -90,6 +99,14 @@ namespace {
           freeReplies(replies, i);
           return PAM_CONV_ERR;
         }
+        // pam_u2f asks for the PIN of a registered key that is plugged in. An
+        // empty one would still reach the key and use up one of its PIN
+        // retries: refuse it, and tell the shell to ask for the PIN.
+        if (data->securityKey && (data->password == nullptr || data->password[0] == '\0')) {
+          sendInfo(*data, pam_helper::kInfoPinWanted);
+          freeReplies(replies, i);
+          return PAM_CONV_ERR;
+        }
         replies[i].resp = ::strdup(data->password != nullptr ? data->password : "");
         data->passwordSent = true;
         break;
@@ -98,11 +115,7 @@ namespace {
         break;
       case PAM_TEXT_INFO:
         // e.g. pam_u2f: an enrolled key is plugged in and waits for a touch.
-        if (data->infoFd >= 0) {
-          const char byte = 'i';
-          // Best effort: the shell may have stopped listening.
-          [[maybe_unused]] const ssize_t written = ::write(data->infoFd, &byte, 1);
-        }
+        sendInfo(*data, pam_helper::kInfoCue);
         replies[i].resp = nullptr;
         break;
       case PAM_ERROR_MSG:
@@ -150,13 +163,13 @@ namespace {
     int pamRc = PAM_SUCCESS;
   };
 
-  [[nodiscard]] Outcome authenticate(const std::string& password, const char* service, int infoFd) {
+  [[nodiscard]] Outcome authenticate(const std::string& password, const char* service, int infoFd, bool securityKey) {
     const std::string user = currentUsername();
     if (user.empty()) {
       return Outcome{.status = pam_helper::Status::UserUnavailable, .pamRc = PAM_USER_UNKNOWN};
     }
 
-    PamConversationData convData{.password = password.c_str(), .infoFd = infoFd};
+    PamConversationData convData{.password = password.c_str(), .infoFd = infoFd, .securityKey = securityKey};
     const pam_conv conv = {
         .conv = &pamConversation,
         .appdata_ptr = &convData,
@@ -193,9 +206,11 @@ namespace {
 int main(int argc, char* argv[]) {
   const char* service = NOCTALIA_PAM_SERVICE;
   int infoFd = -1;
+  bool securityKey = false;
   if (argc == 2 && std::strcmp(argv[1], pam_helper::kSecurityKeyArg) == 0) {
 #ifdef NOCTALIA_PAM_SECURITY_KEY_SERVICE
     service = NOCTALIA_PAM_SECURITY_KEY_SERVICE;
+    securityKey = true;
     // Only if the shell passed one: never write to an unrelated fd 3.
     if (::fcntl(pam_helper::kInfoFd, F_GETFD) >= 0) {
       infoFd = pam_helper::kInfoFd;
@@ -226,7 +241,7 @@ int main(int argc, char* argv[]) {
     return pam_helper::kExitProtocolError;
   }
 
-  const Outcome outcome = authenticate(password, service, infoFd);
+  const Outcome outcome = authenticate(password, service, infoFd, securityKey);
   secureClear(password);
 
   const auto status = static_cast<std::uint8_t>(outcome.status);

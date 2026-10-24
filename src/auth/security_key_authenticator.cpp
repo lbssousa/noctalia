@@ -1,6 +1,7 @@
 #include "auth/security_key_authenticator.h"
 
 #include "auth/pam_authenticator.h"
+#include "auth/pam_helper_protocol.h"
 #include "core/deferred_call.h"
 #include "core/inotify/inotify.h"
 #include "core/log.h"
@@ -18,13 +19,16 @@
 namespace {
   constexpr Logger kLog("security-key");
 
-  // After a touch timeout (or a failed touch) the key is still there: ask again.
-  constexpr auto kRetryDelay = std::chrono::milliseconds(1000);
+  void clearPin(std::string& pin) {
+    volatile char* ptr = pin.empty() ? nullptr : pin.data();
+    for (std::size_t i = 0; i < pin.size(); ++i) {
+      ptr[i] = '\0';
+    }
+    pin.clear();
+  }
+
   // A new hidraw node gets its uaccess ACL a moment after it appears.
   constexpr auto kHotplugSettleDelay = std::chrono::milliseconds(500);
-  // The helper could not even start: don't spin.
-  constexpr auto kSpawnFailureDelay = std::chrono::milliseconds(5000);
-
   [[nodiscard]] int pollRetrying(pollfd* fds, nfds_t count, int timeoutMs) {
     int rc = -1;
     do {
@@ -73,31 +77,55 @@ void SecurityKeyAuthenticator::setAuthenticatedCallback(AuthenticatedCallback ca
   m_onAuthenticated = std::move(callback);
 }
 
-void SecurityKeyAuthenticator::setStatusCallback(StatusCallback callback) { m_onStatus = std::move(callback); }
+void SecurityKeyAuthenticator::setCueCallback(CueCallback callback) { m_onCue = std::move(callback); }
 
-void SecurityKeyAuthenticator::start() {
-  if (m_running) {
+void SecurityKeyAuthenticator::setGaveUpCallback(GaveUpCallback callback) { m_onGaveUp = std::move(callback); }
+
+void SecurityKeyAuthenticator::setPinCallback(PinCallback callback) { m_onPin = std::move(callback); }
+
+void SecurityKeyAuthenticator::start(bool watchHotplug) { startWorker(watchHotplug, {}); }
+
+void SecurityKeyAuthenticator::startWithPin(std::string pin) {
+  if (pin.empty()) {
+    // Never tried on the key: an empty PIN still uses up a retry.
+    start(false);
     return;
   }
-  if (!PamAuthenticator::securityKeyServiceAvailable()) {
-    kLog.debug("built without -Dpam_service_security_key; security key unlock disabled");
-    return;
-  }
+  startWorker(false, std::move(pin));
+}
+
+void SecurityKeyAuthenticator::startWorker(bool watchHotplug, std::string pin) {
   stop();
+  m_token = std::make_shared<int>(0);
+  if (!PamAuthenticator::securityKeyServiceAvailable()) {
+    // Built without -Dpam_service_security_key: give up at once, so the lock
+    // screen sequence moves on to the password.
+    kLog.debug("built without -Dpam_service_security_key; security key unlock disabled");
+    if (!watchHotplug) {
+      post(m_token, [](SecurityKeyAuthenticator& self) {
+        if (self.m_onGaveUp) {
+          self.m_onGaveUp(false);
+        }
+      });
+    }
+    return;
+  }
   m_cancelFd = ::eventfd(0, EFD_CLOEXEC);
   if (m_cancelFd < 0) {
     kLog.warn("eventfd failed; security key unlock disabled");
+    clearPin(pin);
     return;
   }
-  m_token = std::make_shared<int>(0);
-  m_running = true;
+  // Pre-translated on the main thread: PAM runs on the worker.
   PamAuthenticator::Messages messages{
       .startFailed = i18n::tr("auth.pam.start-failed"),
       .userUnavailable = i18n::tr("auth.pam.user-unavailable"),
       .authenticationFailed = i18n::tr("auth.pam.authentication-failed"),
   };
-  m_worker = std::thread([this, messages = std::move(messages), token = std::weak_ptr<void>(m_token)]() mutable {
-    run(std::move(messages), std::move(token));
+  m_worker = std::thread([this, cancelFd = m_cancelFd, messages = std::move(messages),
+                          token = std::weak_ptr<void>(m_token), watchHotplug, pin = std::move(pin)]() mutable {
+    runAttempts(cancelFd, messages, token, watchHotplug, pin);
+    clearPin(pin);
   });
 }
 
@@ -125,32 +153,48 @@ void SecurityKeyAuthenticator::post(std::weak_ptr<void> token, std::function<voi
   });
 }
 
-void SecurityKeyAuthenticator::run(PamAuthenticator::Messages messages, std::weak_ptr<void> token) {
-  runAttempts(m_cancelFd, messages, token);
-  m_running = false;
-}
-
 void SecurityKeyAuthenticator::runAttempts(
-    int cancelFd, const PamAuthenticator::Messages& messages, const std::weak_ptr<void>& token
+    int cancelFd, const PamAuthenticator::Messages& messages, const std::weak_ptr<void>& token, bool watchHotplug,
+    std::string& pin
 ) {
   // Watch /dev before the first attempt, so a key plugged in right after a
   // failed one isn't missed.
   Inotify devWatch;
   const bool hotplug = devWatch.watch("/dev", IN_CREATE | IN_ATTRIB).has_value();
+  if (watchHotplug && !hotplug) {
+    kLog.warn("cannot watch /dev; security key hotplug ignored");
+    return;
+  }
+
+  const auto gaveUp = [this, &token](bool cued) {
+    post(token, [cued](SecurityKeyAuthenticator& self) {
+      if (self.m_onGaveUp) {
+        self.m_onGaveUp(cued);
+      }
+    });
+  };
 
   while (true) {
+    if (watchHotplug && waitForHidraw(cancelFd, devWatch)) {
+      return;
+    }
     devWatch.drain();
 
     PamAuthenticator::Helper helper;
-    if (!PamAuthenticator::spawnHelper(helper, "", true)) {
+    const bool spawned = PamAuthenticator::spawnHelper(helper, pin, true);
+    // The helper has it now (or never will): one attempt per PIN.
+    clearPin(pin);
+    if (!spawned) {
       kLog.warn("could not start the PAM helper");
-      if (waitCancelled(cancelFd, kSpawnFailureDelay)) {
+      gaveUp(false);
+      if (!watchHotplug) {
         return;
       }
       continue;
     }
 
     bool cued = false;
+    bool pinWanted = false;
     bool cancelled = false;
     while (true) {
       pollfd fds[3] = {
@@ -165,14 +209,19 @@ void SecurityKeyAuthenticator::runAttempts(
       if (fds[2].revents != 0) {
         char buf[16];
         const ssize_t n = ::read(helper.infoFd, buf, sizeof(buf));
-        if (n > 0 && !cued) {
-          cued = true;
-          post(token, [](SecurityKeyAuthenticator& self) {
-            if (self.m_onStatus) {
-              self.m_onStatus(i18n::tr("lockscreen.security-key-touch"), false);
-            }
-          });
-        } else if (n <= 0) {
+        for (ssize_t k = 0; k < n; ++k) {
+          if (buf[k] == pam_helper::kInfoPinWanted) {
+            pinWanted = true;
+          } else if (!cued) {
+            cued = true;
+            post(token, [](SecurityKeyAuthenticator& self) {
+              if (self.m_onCue) {
+                self.m_onCue();
+              }
+            });
+          }
+        }
+        if (n <= 0) {
           // EOF: helper is exiting; keep waiting on the result only.
           ::close(helper.infoFd);
           helper.infoFd = -1;
@@ -199,28 +248,26 @@ void SecurityKeyAuthenticator::runAttempts(
       return;
     }
 
-    if (cued) {
-      // Touch timed out, or the key went away (unplugged, suspend).
-      kLog.debug("security key attempt failed: {}", result.message);
+    if (pinWanted) {
+      // Nothing reached the key: the caller asks for the PIN and tries again.
+      kLog.debug("security key wants its PIN");
       post(token, [](SecurityKeyAuthenticator& self) {
-        if (self.m_onStatus) {
-          self.m_onStatus({}, false);
+        if (self.m_onPin) {
+          self.m_onPin();
+        } else if (self.m_onGaveUp) {
+          self.m_onGaveUp(false);
         }
       });
-      if (waitCancelled(cancelFd, kRetryDelay)) {
+      if (!watchHotplug) {
         return;
       }
       continue;
     }
 
-    // No enrolled key plugged in: wait until one may be.
-    if (!hotplug) {
-      if (waitCancelled(cancelFd, kSpawnFailureDelay)) {
-        return;
-      }
-      continue;
-    }
-    if (waitForHidraw(cancelFd, devWatch)) {
+    // Touch timed out, a wrong PIN, the key went away (unplugged, suspend), or none enrolled is plugged in.
+    kLog.debug("security key attempt failed (cued={}): {}", cued, result.message);
+    gaveUp(cued);
+    if (!watchHotplug) {
       return;
     }
   }
