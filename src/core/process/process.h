@@ -48,6 +48,9 @@ namespace process {
     std::shared_ptr<std::atomic<bool>> cancel;
     // Child-only environment changes. `nullopt` unsets the variable.
     std::vector<EnvOverride> env;
+    // Captured runs only: fed to the child's stdin, then EOF. Must fit in a pipe buffer (64 KiB);
+    // larger input fails the run. Without it the child inherits the caller's stdin.
+    std::optional<std::string> stdinData;
   };
 
   [[nodiscard]] bool commandExists(const char* name);

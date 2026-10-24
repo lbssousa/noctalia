@@ -141,6 +141,20 @@ namespace {
     return ok;
   }
 
+  bool syncFeedsStdinData() {
+    process::RunOptions options;
+    options.stdinData = "1234\nsecond line\n";
+    const auto result = process::runSync({"/bin/sh", "-c", "read -r first; printf '%s' \"$first\""}, options);
+    bool ok = expect(result.exitCode == 0, "stdin data command failed");
+    ok = expect(result.out == "1234", "stdin data was not visible in child") && ok;
+
+    // A child that never reads its stdin must not break the run (nor raise SIGPIPE here).
+    options.stdinData = std::string(4096, 'x');
+    const auto ignored = process::runSync(std::vector<std::string>{"true"}, options);
+    ok = expect(ignored.exitCode == 0, "child ignoring stdin data failed") && ok;
+    return ok;
+  }
+
   bool stringCommandsSupportShellComposition() {
     const auto result = process::runSync("printf first && printf second");
     bool ok = expect(result.exitCode == 0, "composed shell command failed");
@@ -249,6 +263,7 @@ int main() {
   ok = capturedAsyncDeliversCallbacksAndResult() && ok;
   ok = capturedAsyncDeliversCompletionOnly() && ok;
   ok = syncAppliesEnvOverrides() && ok;
+  ok = syncFeedsStdinData() && ok;
   ok = stringCommandsSupportShellComposition() && ok;
   ok = detachedAsyncInheritsLaunchEnvironment() && ok;
   ok = detachedMissingBinaryReturnsFalse() && ok;

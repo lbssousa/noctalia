@@ -379,18 +379,45 @@ namespace {
 
     // O_CLOEXEC atomically: a concurrent fork() on another thread must not inherit the write
     // ends, or EOF is delayed for that unrelated child's lifetime. dup2() clears the flag.
+    // Filled before fork(): the data sits in the pipe buffer and the write end closes right
+    // away, so the child sees EOF and a child exiting early can never raise SIGPIPE here.
+    int inPipe[2] = {-1, -1};
+    if (options.stdinData.has_value()) {
+      if (::pipe2(inPipe, O_CLOEXEC) != 0) {
+        return {-1, {}, {}};
+      }
+      const std::string& data = *options.stdinData;
+      std::size_t written = 0;
+      (void)setNonBlocking(inPipe[1]);
+      while (written < data.size()) {
+        const ssize_t n = ::write(inPipe[1], data.data() + written, data.size() - written);
+        if (n < 0 && errno == EINTR) {
+          continue;
+        }
+        if (n <= 0) {
+          closePipe(inPipe);
+          return {-1, {}, {}};
+        }
+        written += static_cast<std::size_t>(n);
+      }
+      closeFd(inPipe[1]);
+    }
+
     int outPipe[2] = {-1, -1};
     int errPipe[2] = {-1, -1};
     if (::pipe2(outPipe, O_CLOEXEC) != 0) {
+      closeFd(inPipe[0]);
       return {-1, {}, {}};
     }
     if (::pipe2(errPipe, O_CLOEXEC) != 0) {
+      closeFd(inPipe[0]);
       closePipe(outPipe);
       return {-1, {}, {}};
     }
 
     const pid_t pid = ::fork();
     if (pid < 0) {
+      closeFd(inPipe[0]);
       closePipe(outPipe);
       closePipe(errPipe);
       return {-1, {}, {}};
@@ -402,6 +429,10 @@ namespace {
       ::setpgid(0, 0);
       closeFd(outPipe[0]);
       closeFd(errPipe[0]);
+      if (inPipe[0] >= 0) {
+        ::dup2(inPipe[0], STDIN_FILENO);
+        closeFd(inPipe[0]);
+      }
       ::dup2(outPipe[1], STDOUT_FILENO);
       ::dup2(errPipe[1], STDERR_FILENO);
       closeFd(outPipe[1]);
@@ -418,6 +449,7 @@ namespace {
     // wins the race; harmless if the child has already exec'd.
     ::setpgid(pid, pid);
 
+    closeFd(inPipe[0]);
     closeFd(outPipe[1]);
     closeFd(errPipe[1]);
     (void)setNonBlocking(outPipe[0]);
