@@ -43,6 +43,8 @@ public:
   void setReadyCallback(ReadyCallback callback);
   void submitResponse(const std::string& response);
   void cancelRequest();
+  // Skips the fingerprint and the security key: restarts the session so PAM asks for the password.
+  void usePassword();
 
   void markNextRequestInternal();
 

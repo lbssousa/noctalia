@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <fstream>
 #include <gio/gio.h>
 #include <glib-object.h>
 #include <glib.h>
@@ -30,6 +31,13 @@ namespace {
 
   constexpr Logger kLog("polkit");
   constexpr auto kAgentObjectPath = "/org/noctalia/PolkitAuthenticationAgent";
+
+  // While this file exists, the polkit-1 PAM stack jumps straight to the
+  // password (a pam_exec check ahead of pam_fprintd and pam_u2f, set up by the
+  // system). It lives in the user's runtime dir, so only the user can make it.
+  std::string usePasswordFlagPath() {
+    return "/run/user/" + std::to_string(::geteuid()) + "/noctalia-polkit-use-password";
+  }
 
   // GObject dispatches these signal/vfunc callbacks through libffi (g_cclosure_marshal_generic),
   // so a C++ exception escaping one would unwind across the C ABI and call std::terminate. Run the
@@ -283,6 +291,8 @@ struct PolkitAgent::Impl {
   std::unique_ptr<InternalAuthRequest> pending;
   PolkitIdentity* activeIdentity = nullptr;
   bool cancelling = false;
+  // "Use password" was picked for the pending request: every session for it skips to the password.
+  bool passwordOnly = false;
 
   bool responseRequired = false;
   bool responseVisible = false;
@@ -502,6 +512,8 @@ struct PolkitAgent::Impl {
     }
     pending.reset();
     cancelling = false;
+    passwordOnly = false;
+    removeUsePasswordFlag();
     clearConversationState();
     if (!silent) {
       emitStateChanged();
@@ -523,6 +535,7 @@ struct PolkitAgent::Impl {
     }
 
     pending = std::move(request);
+    passwordOnly = false;
     clearConversationState();
     if (!startSession()) {
       kLog.warn("polkit session startup failed for action \"{}\"", pending->actionId);
@@ -565,6 +578,9 @@ struct PolkitAgent::Impl {
     }
 
     activeIdentity = chosen;
+    if (passwordOnly) {
+      writeUsePasswordFlag();
+    }
     session = polkit_agent_session_new(activeIdentity, pending->cookie.c_str());
     if (session == nullptr) {
       return false;
@@ -579,7 +595,37 @@ struct PolkitAgent::Impl {
     return true;
   }
 
+  void writeUsePasswordFlag() {
+    std::ofstream flag(usePasswordFlagPath(), std::ios::trunc);
+    if (!flag) {
+      kLog.warn("polkit: could not write {}", usePasswordFlagPath());
+    }
+  }
+
+  static void removeUsePasswordFlag() { ::unlink(usePasswordFlagPath().c_str()); }
+
+  // Drops the session waiting on the fingerprint or the security key and starts
+  // a new one that goes straight to the password.
+  void usePassword() {
+    if (pending == nullptr || session == nullptr || responseRequired || passwordOnly) {
+      return;
+    }
+    passwordOnly = true;
+    // Disconnect first: the cancel emits "completed", which would count as a failed attempt.
+    g_signal_handlers_disconnect_by_data(session, this);
+    polkit_agent_session_cancel(session);
+    clearConversationState();
+    if (!startSession()) {
+      kLog.warn("polkit session restart failed for action \"{}\"", pending->actionId);
+      clearPending("Failed to restart authentication session");
+      return;
+    }
+    emitStateChanged();
+  }
+
   void handleRequest(const std::string& prompt, bool echoOn) {
+    // PAM got past the check: the flag has done its job.
+    removeUsePasswordFlag();
     inputPrompt = prompt.empty() ? i18n::tr("auth.polkit.default-message") : prompt;
     responseVisible = echoOn;
     responseRequired = true;
@@ -596,6 +642,7 @@ struct PolkitAgent::Impl {
     if (pending == nullptr) {
       return;
     }
+    removeUsePasswordFlag();
 
     if (gainedAuthorization) {
       kLog.info(
@@ -775,6 +822,12 @@ void PolkitAgent::submitResponse(const std::string& response) {
 void PolkitAgent::cancelRequest() {
   if (m_impl != nullptr) {
     m_impl->cancelRequest();
+  }
+}
+
+void PolkitAgent::usePassword() {
+  if (m_impl != nullptr) {
+    m_impl->usePassword();
   }
 }
 
