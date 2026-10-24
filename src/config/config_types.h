@@ -597,6 +597,8 @@ struct LockscreenConfig {
   // and on logind resume as a defense in depth.
   int gracePeriodSeconds = 0;
   bool fingerprint = true;
+  // Unlock with a touch on a FIDO2 key, through the "noctalia-lock-u2f" PAM service.
+  bool securityKey = true;
   bool allowEmptyPassword = false;
   // PAM service (under /etc/pam.d/) the lock screen authenticates against.
   // "login" suits most distros; a custom service avoids distro stacks that
