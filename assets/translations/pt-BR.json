@@ -24,6 +24,16 @@
       "invalid-password": "Senha inválida",
       "password-placeholder": "Senha",
       "title": "Autenticação necessária"
+    },
+    "secret-prompt": {
+      "answer-placeholder": "Resposta",
+      "gpg-title": "Senha do GnuPG",
+      "mismatch": "As senhas não conferem",
+      "ok": "OK",
+      "passphrase-placeholder": "Senha",
+      "repeat-placeholder": "Repita a senha",
+      "ssh-title": "Autenticação SSH",
+      "unlock": "Desbloquear"
     }
   },
   "bar": {
@@ -3369,6 +3379,10 @@
           "description": "Estilo visual para mascaramento de entrada de senha",
           "label": "Estilo da Senha"
         },
+        "pinentry": {
+          "label": "Pinentry do GnuPG",
+          "description": "Responder pela shell aos pedidos de senha e PIN do gpg-agent (pinentry-program = noctalia-pinentry)"
+        },
         "polkit-agent": {
           "description": "Habilitar o agente de autenticação integrado",
           "label": "Agente Polkit"
@@ -3474,6 +3488,10 @@
         "show-location": {
           "description": "Exibe o nome do local nos widgets de previsão do tempo",
           "label": "Mostrar Localização"
+        },
+        "ssh-askpass": {
+          "label": "SSH Askpass",
+          "description": "Responder pela shell aos pedidos do ssh, ssh-add e git (SSH_ASKPASS = noctalia-askpass)"
         },
         "sync-greeter": {
           "button": "Sincronizar Agora",

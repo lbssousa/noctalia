@@ -9,6 +9,7 @@
 #include "i18n/i18n.h"
 #include "render/core/renderer.h"
 #include "render/scene/input_area.h"
+#include "shell/auth_text.h"
 #include "shell/panel/panel_manager.h"
 #include "ui/builders.h"
 #include "ui/controls/glyph.h"
@@ -17,62 +18,14 @@
 #include "ui/style.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <memory>
 #include <string>
 
 namespace {
 
-  int wrappedLineCount(std::string_view text, int charsPerLine, int maxLines) {
-    if (text.empty()) {
-      return 0;
-    }
-    int lines = 0;
-    int col = 0;
-    for (char ch : text) {
-      if (ch == '\n') {
-        ++lines;
-        col = 0;
-        if (lines >= maxLines) {
-          return maxLines;
-        }
-        continue;
-      }
-      ++col;
-      if (charsPerLine > 0 && col > charsPerLine) {
-        ++lines;
-        col = 1;
-        if (lines >= maxLines) {
-          return maxLines;
-        }
-      }
-    }
-    if (col > 0 || lines == 0) {
-      ++lines;
-    }
-    return std::min(lines, maxLines);
-  }
-
-  std::string wrapLongRuns(std::string text, std::size_t maxRun = 48) {
-    std::string out;
-    out.reserve(text.size() + text.size() / maxRun);
-    std::size_t run = 0;
-    for (char ch : text) {
-      const bool breakable = std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == '/' || ch == ':' || ch == '-';
-      out.push_back(ch);
-      if (breakable) {
-        run = 0;
-        continue;
-      }
-      ++run;
-      if (run >= maxRun) {
-        out.push_back('\n');
-        run = 0;
-      }
-    }
-    return out;
-  }
+  using auth_text::wrapLongRuns;
+  using auth_text::wrappedLineCount;
 
 } // namespace
 

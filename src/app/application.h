@@ -130,6 +130,8 @@ class PipeWireSpectrum;
 class PipeWireSpectrumPollSource;
 class PolkitAgent;
 class PolkitPollSource;
+class SecretPromptPollSource;
+class SecretPromptService;
 class PowerProfilesService;
 class ScreenSaverPollSource;
 class ScreenSaverService;
@@ -213,6 +215,7 @@ private:
   void retrySecretServiceConsumers(bool defaultCollectionUnlocked = false);
   void scheduleNotificationShellRefresh();
   void syncPolkitAgent();
+  void syncSecretPromptService();
   [[nodiscard]] bool likelySupportsInSessionPolkit() const noexcept;
   void syncClipboardService();
   void syncStorageKeyProvider();
@@ -298,6 +301,7 @@ private:
   std::unique_ptr<ModemManagerService> m_modemManagerService;
   Timer m_bluetoothResumeTimer;
   std::unique_ptr<PolkitAgent> m_polkitAgent;
+  std::unique_ptr<SecretPromptService> m_secretPromptService;
   std::optional<bool> m_notificationDaemonEnabled;
   bool m_notificationDaemonInitFailed = false;
   bool m_notificationShellRefreshScheduled = false;
@@ -390,6 +394,7 @@ private:
   std::unique_ptr<PipeWirePollSource> m_pipewirePollSource;
   std::unique_ptr<PipeWireSpectrumPollSource> m_pipewireSpectrumPollSource;
   std::unique_ptr<PolkitPollSource> m_polkitPollSource;
+  std::unique_ptr<SecretPromptPollSource> m_secretPromptPollSource;
   IpcService m_ipcService;
   IpcPollSource m_ipcPollSource{m_ipcService};
   DmenuIpcService m_dmenuIpc;
@@ -403,6 +408,7 @@ private:
   CalendarReminderPollSource m_calendarReminderPollSource{m_calendarReminderMonitor};
   Timer m_polkitInitTimer;
   Timer m_polkitIdleCloseTimer;
+  Timer m_secretPromptIdleCloseTimer;
   Timer m_greeterSyncTimeoutTimer;
   Timer m_greeterAutoSyncTimer;
   Timer m_clipboardAutoPasteTimer;

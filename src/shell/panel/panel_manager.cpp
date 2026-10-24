@@ -308,7 +308,7 @@ namespace {
     if (panelId == "session") {
       return pc.sessionPosition;
     }
-    if (panelId == "polkit") {
+    if (panelId == "polkit" || panelId == "secret-prompt") {
       return pc.polkitPosition;
     }
     return "auto";

@@ -1186,7 +1186,7 @@ struct ShellConfig {
     struct PanelsConfig {
       // Panel ids the panel provider never lists. Setting this in config.toml
       // replaces the default outright, same as every other list config here.
-      std::vector<std::string> ignored{"polkit", "setup-wizard", "test", "launcher"};
+      std::vector<std::string> ignored{"polkit", "secret-prompt", "setup-wizard", "test", "launcher"};
 
       bool operator==(const PanelsConfig&) const = default;
     } panels;
@@ -1287,6 +1287,10 @@ struct ShellConfig {
   bool niriOverviewTypeToLaunchEnabled = false;
   bool umbrielOverviewTypeToLaunchEnabled = false;
   bool polkitAgent = false;
+  /// Serve gpg-agent's pinentry (noctalia-pinentry) from the shell.
+  bool pinentry = false;
+  /// Serve SSH_ASKPASS (noctalia-askpass) from the shell.
+  bool sshAskpass = false;
   PasswordMaskStyle passwordMaskStyle = PasswordMaskStyle::CircleFilled;
   /// Readline-style editing shortcuts in every text input (Ctrl+A moves to the start instead of selecting all).
   bool readlineShortcuts = false;

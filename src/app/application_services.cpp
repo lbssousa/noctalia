@@ -66,6 +66,8 @@
 #include "scripting/plugin_registry.h"
 #include "scripting/plugin_runtime_context.h"
 #include "scripting/script_runtime.h"
+#include "security/prompt/secret_prompt_poll_source.h"
+#include "security/prompt/secret_prompt_service.h"
 #include "shell/clipboard/clipboard_panel.h"
 #include "shell/clipboard/clipboard_paste.h"
 #include "shell/control_center/control_center_panel.h"
@@ -466,6 +468,55 @@ void Application::syncPolkitAgent() {
   });
   m_polkitPollSource = std::make_unique<PolkitPollSource>(*m_polkitAgent);
   m_polkitAgent->start();
+}
+
+void Application::syncSecretPromptService() {
+  const bool pinentry = m_configService.config().shell.pinentry;
+  const bool askpass = m_configService.config().shell.sshAskpass;
+  if (!pinentry && !askpass) {
+    if (m_secretPromptService != nullptr) {
+      kLog.info("secret prompts disabled by config");
+      m_secretPromptIdleCloseTimer.stop();
+      m_secretPromptPollSource.reset();
+      m_secretPromptService.reset();
+      if (m_panelManager.isOpenPanel("secret-prompt")) {
+        m_panelManager.close();
+      }
+    }
+    return;
+  }
+
+  if (m_secretPromptService == nullptr) {
+    m_secretPromptService = std::make_unique<SecretPromptService>();
+    m_secretPromptService->setStateCallback([this]() {
+      if (m_secretPromptService == nullptr) {
+        return;
+      }
+      if (!m_secretPromptService->hasPendingRequest()) {
+        // Defer close so the next request of the same burst (gpg retrying a wrong
+        // passphrase, ssh asking for the next key) reuses the panel.
+        if (m_panelManager.isOpenPanel("secret-prompt")) {
+          m_secretPromptIdleCloseTimer.start(std::chrono::milliseconds(150), [this]() {
+            if (m_secretPromptService != nullptr
+                && !m_secretPromptService->hasPendingRequest()
+                && m_panelManager.isOpenPanel("secret-prompt")) {
+              m_panelManager.close();
+            }
+          });
+        }
+        return;
+      }
+      m_secretPromptIdleCloseTimer.stop();
+      if (!m_panelManager.isOpenPanel("secret-prompt")) {
+        wl_output* output = m_compositorPlatform.preferredInteractiveOutput(std::chrono::milliseconds(1200));
+        m_panelManager.openPanel("secret-prompt", PanelOpenRequest{.output = output});
+      } else {
+        m_panelManager.refresh();
+      }
+    });
+    m_secretPromptPollSource = std::make_unique<SecretPromptPollSource>(*m_secretPromptService);
+  }
+  m_secretPromptService->setEnabled(pinentry, askpass);
 }
 
 void Application::syncScreenTimeService() {
