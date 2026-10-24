@@ -223,6 +223,14 @@ void PolkitPanel::create() {
                   },
           }),
           ui::button({
+              .out = &m_usePasswordButton,
+              .text = i18n::tr("auth.polkit.use-password"),
+              .glyph = "password",
+              .variant = ButtonVariant::Secondary,
+              .visible = false,
+              .onClick = [this]() { usePassword(); },
+          }),
+          ui::button({
               .out = &m_submitButton,
               .text = i18n::tr("auth.polkit.authenticate"),
               .variant = ButtonVariant::Primary,
@@ -236,6 +244,7 @@ void PolkitPanel::create() {
 
 void PolkitPanel::onOpen(std::string_view /*context*/) {
   m_lastResponseRequired = false;
+  m_lastPinPrompt = false;
   m_lastCue = AuthCue::None;
   m_iconResolved = false;
   m_hasTrackedRequest = false;
@@ -262,6 +271,7 @@ void PolkitPanel::onClose() {
   m_hasTrackedRequest = false;
   m_trackedRequestCookie.clear();
   m_lastResponseRequired = false;
+  m_lastPinPrompt = false;
   clearReleasedRoot();
 
   m_rootLayout = nullptr;
@@ -273,6 +283,7 @@ void PolkitPanel::onClose() {
   m_input = nullptr;
   m_submitButton = nullptr;
   m_cancelButton = nullptr;
+  m_usePasswordButton = nullptr;
   m_iconContainer = nullptr;
   m_icon = nullptr;
   m_fallbackIcon = nullptr;
@@ -290,8 +301,23 @@ void PolkitPanel::cancelAuth() {
   }
 }
 
+void PolkitPanel::usePassword() {
+  PolkitAgent* agent = m_agentProvider != nullptr ? m_agentProvider() : nullptr;
+  if (agent != nullptr && agent->hasPendingRequest()) {
+    agent->usePassword();
+  }
+}
+
 bool PolkitPanel::handleGlobalKey(std::uint32_t sym, std::uint32_t modifiers, bool pressed, bool /*preedit*/) {
-  if (!pressed || !KeybindMatcher::matches(KeybindAction::Cancel, sym, modifiers)) {
+  if (!pressed) {
+    return false;
+  }
+  // Enter (or Space) is the "use password" button while the cue is up.
+  if (m_lastCue != AuthCue::None && KeybindMatcher::matches(KeybindAction::Validate, sym, modifiers)) {
+    usePassword();
+    return true;
+  }
+  if (!KeybindMatcher::matches(KeybindAction::Cancel, sym, modifiers)) {
     return false;
   }
   cancelAuth();
@@ -336,7 +362,8 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
       || m_input == nullptr
       || m_icon == nullptr
       || m_fallbackIcon == nullptr
-      || m_cueBox == nullptr) {
+      || m_cueBox == nullptr
+      || m_usePasswordButton == nullptr) {
     return;
   }
   const PolkitRequest request = agent->pendingRequest();
@@ -348,7 +375,10 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
   const std::string supplementaryRaw = agent->supplementaryMessage();
   const bool supplementaryError = agent->supplementaryIsError();
   const bool isInvalidPassword = supplementaryError && supplementaryRaw == i18n::tr("auth.polkit.invalid-password");
-  std::string promptText = wrapLongRuns(agent->inputPrompt());
+  // pam_u2f asks for the key's PIN before the touch: say so, and offer the password instead.
+  const bool pinPrompt = needsInput && auth_text::isSecurityKeyPinPrompt(agent->inputPrompt());
+  std::string promptText =
+      pinPrompt ? i18n::tr("auth.polkit.security-key.pin-prompt") : wrapLongRuns(agent->inputPrompt());
   std::string supplementaryText = wrapLongRuns(supplementaryRaw);
   if (!supplementaryText.empty()
       && (!needsInput || supplementaryError || supplementaryText == i18n::tr("auth.polkit.authenticating"))) {
@@ -367,8 +397,15 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
   m_supplementaryLabel->setVisible(!supplementaryText.empty());
   m_supplementaryLabel->setColor(colorSpecFromRole(ColorRole::OnSurfaceVariant));
   m_input->setVisible(needsInput);
+  if (pinPrompt != m_lastPinPrompt) {
+    m_input->setPlaceholder(
+        i18n::tr(pinPrompt ? "auth.polkit.security-key.pin-placeholder" : "auth.polkit.password-placeholder")
+    );
+    m_lastPinPrompt = pinPrompt;
+  }
   m_submitButton->setVisible(needsInput);
   m_submitButton->setEnabled(needsInput && !m_input->value().empty());
+  m_usePasswordButton->setVisible(cue != AuthCue::None || pinPrompt);
   if (needsInput && !m_lastResponseRequired) {
     if (auto* manager = PanelManager::current(); manager != nullptr && manager->isOpenPanel("polkit")) {
       manager->focusArea(m_input->inputArea());

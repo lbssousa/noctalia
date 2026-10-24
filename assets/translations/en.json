@@ -29,9 +29,12 @@
       "password-placeholder": "Password",
       "security-key": {
         "detail": "Touch the key's contact when its light blinks",
+        "pin-placeholder": "PIN",
+        "pin-prompt": "Enter your security key's PIN, then touch it",
         "title": "Touch your security key"
       },
-      "title": "Authentication Required"
+      "title": "Authentication Required",
+      "use-password": "Use password"
     }
   },
   "bar": {

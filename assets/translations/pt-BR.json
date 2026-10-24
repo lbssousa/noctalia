@@ -29,9 +29,12 @@
       "password-placeholder": "Senha",
       "security-key": {
         "detail": "Toque no contato da chave quando a luz piscar",
+        "pin-placeholder": "PIN",
+        "pin-prompt": "Digite o PIN da sua chave de segurança e depois toque nela",
         "title": "Toque na sua chave de segurança"
       },
-      "title": "Autenticação necessária"
+      "title": "Autenticação necessária",
+      "use-password": "Usar senha"
     }
   },
   "bar": {

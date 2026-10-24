@@ -28,4 +28,14 @@ namespace auth_text {
     return AuthCue::None;
   }
 
+  // pam_u2f's PIN prompt ("Please enter the PIN: ", not translated): a key registered with
+  // its PIN required (+pin, or pinverification=1) is plugged in.
+  inline bool isSecurityKeyPinPrompt(std::string_view text) {
+    std::string lower(text);
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) {
+      return static_cast<char>(std::tolower(ch));
+    });
+    return lower.find("enter the pin") != std::string::npos;
+  }
+
 } // namespace auth_text

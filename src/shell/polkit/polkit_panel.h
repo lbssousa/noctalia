@@ -48,6 +48,7 @@ private:
   void doUpdate(Renderer& renderer) override;
   void submit(std::string_view response = {});
   void cancelAuth();
+  void usePassword();
   bool handleInputKeyEvent(std::uint32_t sym, std::uint32_t modifiers);
   void resolveIcon(Renderer& renderer, const PolkitRequest& request);
   void loadIcon(Renderer& renderer, const std::string& path, float iconSize);
@@ -65,6 +66,7 @@ private:
   Input* m_input = nullptr;
   Button* m_submitButton = nullptr;
   Button* m_cancelButton = nullptr;
+  Button* m_usePasswordButton = nullptr;
   Node* m_iconContainer = nullptr;
   Image* m_icon = nullptr;
   Glyph* m_fallbackIcon = nullptr;
@@ -77,6 +79,7 @@ private:
   bool m_iconResolved = false;
   bool m_iconIsAppIcon = false;
   bool m_lastResponseRequired = false;
+  bool m_lastPinPrompt = false;
   auth_text::AuthCue m_lastCue = auth_text::AuthCue::None;
   std::string m_trackedRequestCookie;
   bool m_hasTrackedRequest = false;
