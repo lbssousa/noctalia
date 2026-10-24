@@ -25,6 +25,9 @@ namespace {
 
   constexpr std::size_t kMaxPamMessageBytes = 4096;
   constexpr std::size_t kMaxPasswordBytes = 64 * 1024;
+  // Helper's fd for PAM_TEXT_INFO notifications (pam-helper --notify-info).
+  constexpr int kInfoFd = 3;
+  constexpr const char* kNotifyInfoArg = "--notify-info";
 
   void secureClear(std::string& value) {
     volatile char* ptr = value.empty() ? nullptr : value.data();
@@ -37,6 +40,7 @@ namespace {
   struct PamConversationData {
     const char* password = nullptr;
     bool passwordSent = false;
+    int infoFd = -1;
   };
 
   struct PamHandle {
@@ -88,8 +92,16 @@ namespace {
       case PAM_PROMPT_ECHO_ON:
         replies[i].resp = ::strdup("");
         break;
-      case PAM_ERROR_MSG:
       case PAM_TEXT_INFO:
+        // e.g. pam_u2f's cue: an enrolled key is plugged in and waits for a touch.
+        if (data->infoFd >= 0) {
+          const char byte = 'i';
+          // Best effort: the parent may have stopped listening.
+          [[maybe_unused]] const ssize_t written = ::write(data->infoFd, &byte, 1);
+        }
+        replies[i].resp = nullptr;
+        break;
+      case PAM_ERROR_MSG:
         replies[i].resp = nullptr;
         break;
       default:
@@ -164,14 +176,15 @@ namespace {
     closeFd(pipeFds[1]);
   }
 
-  [[nodiscard]] bool moveFdAboveStdio(int& fd) {
-    if (fd > STDERR_FILENO) {
+  // Above the fds the helper gets (stdio and kInfoFd), so dup2() never clobbers a pipe end.
+  [[nodiscard]] bool moveFdAboveHelperFds(int& fd) {
+    if (fd > kInfoFd) {
       return true;
     }
 
     int movedFd = -1;
     do {
-      movedFd = ::fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+      movedFd = ::fcntl(fd, F_DUPFD_CLOEXEC, kInfoFd + 1);
     } while (movedFd < 0 && errno == EINTR);
     if (movedFd < 0) {
       return false;
@@ -183,7 +196,7 @@ namespace {
   }
 
   [[nodiscard]] bool createPipe(int (&pipeFds)[2]) {
-    if (::pipe2(pipeFds, O_CLOEXEC) != 0 || !moveFdAboveStdio(pipeFds[0]) || !moveFdAboveStdio(pipeFds[1])) {
+    if (::pipe2(pipeFds, O_CLOEXEC) != 0 || !moveFdAboveHelperFds(pipeFds[0]) || !moveFdAboveHelperFds(pipeFds[1])) {
       closePipe(pipeFds);
       return false;
     }
@@ -269,14 +282,15 @@ namespace {
     return true;
   }
 
-  [[nodiscard]] PamAuthenticator::Result authenticateDirect(std::string_view password, std::string_view service) {
+  [[nodiscard]] PamAuthenticator::Result
+  authenticateDirect(std::string_view password, std::string_view service, int infoFd) {
     std::string user = PamAuthenticator::currentUsername();
     if (user.empty()) {
       return PamAuthenticator::Result{.success = false, .message = i18n::tr("auth.pam.user-unavailable")};
     }
 
     std::string passwordCopy(password);
-    PamConversationData convData{.password = passwordCopy.c_str()};
+    PamConversationData convData{.password = passwordCopy.c_str(), .infoFd = infoFd};
     pam_conv conv = {
         .conv = &pamConversation,
         .appdata_ptr = &convData,
@@ -335,14 +349,21 @@ namespace {
 PamAuthenticator::Result PamAuthenticator::authenticateCurrentUser(
     std::string_view password, std::string_view service, std::string_view language, std::string_view startFailureMessage
 ) const {
+  Helper helper;
+  Result result;
+  if (!spawnHelper(helper, password, service, language, false) || !finishHelper(helper, result)) {
+    return Result{.success = false, .message = std::string(startFailureMessage)};
+  }
+  return result;
+}
+
+bool PamAuthenticator::spawnHelper(
+    Helper& helper, std::string_view password, std::string_view service, std::string_view language, bool notifyInfo
+) {
   // Re-exec before invoking PAM so the helper cannot inherit locked library
   // state from the shell's other threads.
-  const auto fail = [startFailureMessage]() {
-    return Result{.success = false, .message = std::string(startFailureMessage)};
-  };
-
   if (password.size() > kMaxPasswordBytes || service.empty() || language.empty()) {
-    return fail();
+    return false;
   }
 
   std::string serviceCopy(service);
@@ -350,70 +371,99 @@ PamAuthenticator::Result PamAuthenticator::authenticateCurrentUser(
 
   int inPipe[2] = {-1, -1};
   int outPipe[2] = {-1, -1};
+  int infoPipe[2] = {-1, -1};
   if (!createPipe(inPipe)) {
-    return fail();
+    return false;
   }
-  if (!createPipe(outPipe)) {
+  if (!createPipe(outPipe) || (notifyInfo && !createPipe(infoPipe))) {
     closePipe(inPipe);
-    return fail();
+    closePipe(outPipe);
+    return false;
   }
 
   const char* helperArgv[] = {
-      "noctalia", "pam-helper", serviceCopy.c_str(), languageCopy.c_str(), nullptr,
+      "noctalia", "pam-helper", serviceCopy.c_str(), languageCopy.c_str(), notifyInfo ? kNotifyInfoArg : nullptr,
+      nullptr,
   };
 
   const pid_t pid = ::fork();
   if (pid < 0) {
     closePipe(inPipe);
     closePipe(outPipe);
-    return fail();
+    closePipe(infoPipe);
+    return false;
   }
 
   if (pid == 0) {
     // Keep this path async-signal-safe until execv().
-    if (::dup2(inPipe[0], STDIN_FILENO) < 0 || ::dup2(outPipe[1], STDOUT_FILENO) < 0) {
+    if (::dup2(inPipe[0], STDIN_FILENO) < 0
+        || ::dup2(outPipe[1], STDOUT_FILENO) < 0
+        || (infoPipe[1] >= 0 && ::dup2(infoPipe[1], kInfoFd) < 0)) {
       ::_exit(127);
     }
-    (void)::close(inPipe[0]);
-    (void)::close(inPipe[1]);
-    (void)::close(outPipe[0]);
-    (void)::close(outPipe[1]);
+    for (const int fd : {inPipe[0], inPipe[1], outPipe[0], outPipe[1], infoPipe[0], infoPipe[1]}) {
+      if (fd >= 0) {
+        (void)::close(fd);
+      }
+    }
     ::execv("/proc/self/exe", const_cast<char* const*>(helperArgv));
     ::_exit(127);
   }
 
   closeFd(inPipe[0]);
   closeFd(outPipe[1]);
+  closeFd(infoPipe[1]);
+
+  helper = Helper{.pid = pid, .resultFd = outPipe[0], .infoFd = infoPipe[0]};
 
   const bool sentOk = sendPassword(inPipe[1], password);
   closeFd(inPipe[1]);
+  if (!sentOk) {
+    kLog.warn("pam helper failed (could not send the password)");
+    cancelHelper(helper);
+    return false;
+  }
+  return true;
+}
 
-  Result result;
-  const bool readOk = sentOk && readResult(outPipe[0], result);
-  closeFd(outPipe[0]);
+bool PamAuthenticator::finishHelper(Helper& helper, Result& result) {
+  const bool readOk = readResult(helper.resultFd, result);
+  closeFd(helper.resultFd);
+  closeFd(helper.infoFd);
 
   int status = 0;
   pid_t waitResult = -1;
   do {
-    waitResult = ::waitpid(pid, &status, 0);
+    waitResult = ::waitpid(helper.pid, &status, 0);
   } while (waitResult < 0 && errno == EINTR);
 
-  const bool exited = waitResult == pid && WIFEXITED(status);
+  const bool exited = waitResult == helper.pid && WIFEXITED(status);
   const int exitCode = exited ? WEXITSTATUS(status) : -1;
+  helper.pid = -1;
   const bool statusOk = readOk && (exitCode == 0 || exitCode == 1) && ((exitCode == 0) == result.success);
-  if (!sentOk || !statusOk) {
-    kLog.warn(
-        "pam helper failed (sent={} read={} waited={} exited={} status={})", sentOk, readOk, waitResult == pid, exited,
-        exitCode
-    );
-    return fail();
+  if (!statusOk) {
+    kLog.warn("pam helper failed (read={} exited={} status={})", readOk, exited, exitCode);
+    return false;
   }
+  return true;
+}
 
-  return result;
+void PamAuthenticator::cancelHelper(Helper& helper) {
+  closeFd(helper.resultFd);
+  closeFd(helper.infoFd);
+  if (helper.pid <= 0) {
+    return;
+  }
+  (void)::kill(helper.pid, SIGTERM);
+  int status = 0;
+  while (::waitpid(helper.pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  helper.pid = -1;
 }
 
 int PamAuthenticator::runHelperMode(int argc, char* argv[]) {
-  if (argc != 4 || argv[2][0] == '\0' || argv[3][0] == '\0') {
+  const bool notifyInfo = argc == 5 && std::strcmp(argv[4], kNotifyInfoArg) == 0;
+  if ((argc != 4 && !notifyInfo) || argv[2][0] == '\0' || argv[3][0] == '\0') {
     return 2;
   }
 
@@ -434,7 +484,7 @@ int PamAuthenticator::runHelperMode(int argc, char* argv[]) {
     return 2;
   }
 
-  Result result = authenticateDirect(password, service);
+  Result result = authenticateDirect(password, service, notifyInfo ? kInfoFd : -1);
   secureClear(password);
 
   if (!writeResult(STDOUT_FILENO, result)) {

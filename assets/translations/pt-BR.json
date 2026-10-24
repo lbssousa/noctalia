@@ -874,6 +874,7 @@
     "password-cleared": "Senha apagada",
     "password-placeholder": "Senha",
     "ready": "Digite sua senha e pressione Enter.",
+    "security-key-touch": "Toque na sua chave de segurança",
     "unlocked": "Desbloqueado",
     "waiting": "Aguardando confirmação de bloqueio…"
   },
@@ -2466,6 +2467,10 @@
         "monitors": {
           "description": "Escolha em quais monitores a tela de bloqueio será exibida; deixe em branco para exibir em todos os monitores",
           "label": "Monitores"
+        },
+        "security-key": {
+          "label": "Desbloquear com Chave de Segurança",
+          "description": "Desbloquear com um toque em uma chave de segurança FIDO2 (pam_u2f), junto com a senha digitada"
         },
         "tint-intensity": {
           "description": "Base de cor da superfície sobre o fundo da tela de bloqueio",

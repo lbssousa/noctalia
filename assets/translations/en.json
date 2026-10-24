@@ -875,6 +875,7 @@
     "password-cleared": "Password cleared",
     "password-placeholder": "Password",
     "ready": "Type your password and press Enter.",
+    "security-key-touch": "Touch your security key",
     "unlocked": "Unlocked",
     "waiting": "Waiting for lock confirmation…"
   },
@@ -2495,6 +2496,10 @@
         "monitors": {
           "description": "Choose which monitors show the lock screen; leave empty to show on all monitors",
           "label": "Monitors"
+        },
+        "security-key": {
+          "label": "Security Key Unlock",
+          "description": "Unlock with a touch on a FIDO2 security key (pam_u2f), alongside password entry"
         },
         "tint-intensity": {
           "description": "Surface-color tint over the lock screen background",

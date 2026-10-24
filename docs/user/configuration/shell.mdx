@@ -484,6 +484,7 @@ enabled               = true      # master switch for session lock
 lock_before_suspend   = true      # lock on PrepareForSleep (lid close / systemctl suspend)
 grace_period_seconds  = 0         # passwordless unlock window after locking; 0 (default) = off
 fingerprint           = true      # allow fingerprint (PAM) authentication on the lock screen
+security_key          = true      # unlock with a touch on a FIDO2 key (PAM service "noctalia-lock-u2f")
 allow_empty_password  = false     # submit Enter with an empty password (security-key PAM stacks)
 blurred_desktop       = false     # use a desktop snapshot as the lock screen background
 transition            = ["fade", "wipe", "disc", "stripes", "zoom", "honeycomb"]
@@ -501,6 +502,7 @@ monitors              = []        # connectors that show the lock screen; empty 
 | `lock_before_suspend` | bool | `true` | When `true`, hold a logind sleep-delay inhibitor and lock on `PrepareForSleep` before suspend/hibernate (including lid-close sleep). Set `false` to allow external suspend without locking; explicit **Lock and Suspend** actions still lock first. |
 | `grace_period_seconds` | int | `0` | Passwordless unlock window right after locking. Strictly opt-in: with the default `0`, every unlock requires authentication. When set to a value in `1`–`60`, any keypress or mouse movement of more than 5 px unlocks without a password for that many seconds after the lock starts, including idle-triggered locks; time spent suspended counts toward expiry. The window is always revoked when the session sleeps: locks engaged by `PrepareForSleep` or **Lock and Suspend** never offer passwordless unlock, and a resume clears whatever was left. |
 | `fingerprint` | bool | `true` | When `true`, fingerprint (PAM) authentication is offered on the lock screen alongside the password field. Set `false` to require password entry only. |
+| `security_key` | bool | `true` | When `true`, the lock screen waits for a touch on a FIDO2 security key alongside the password field and the fingerprint reader, with no Enter needed. It runs the `noctalia-lock-u2f` PAM service (typically `auth sufficient pam_u2f.so` and nothing else) whenever a hidraw device appears; without that service, or without an enrolled key plugged in, it stays idle. |
 | `allow_empty_password` | bool | `false` | When `true`, Enter can submit an empty password (needed for some security-key PAM stacks). When `false`, empty submits are ignored to avoid accidental `pam_faillock` lockouts from wake keys. |
 | `blurred_desktop` | bool | `false` | Capture each output before lock and use it as the lock screen background. |
 | `transition` | array | all effects | Pool of lock/unlock effects: `fade`, `wipe`, `disc`, `stripes`, `zoom`, and `honeycomb`. One is selected from the configured pool; an empty array disables transitions. |

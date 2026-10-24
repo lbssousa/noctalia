@@ -1,6 +1,7 @@
 #include "shell/lockscreen/lock_screen.h"
 
 #include "auth/fingerprint_authenticator.h"
+#include "auth/security_key_authenticator.h"
 #include "capture/screencopy_util.h"
 #include "compositors/compositor_platform.h"
 #include "config/config_service.h"
@@ -117,6 +118,17 @@ bool LockScreen::initialize(
       handleFingerprintStatus(message, isError);
     });
   }
+  m_securityKey = std::make_unique<SecurityKeyAuthenticator>();
+  m_securityKey->setAuthenticatedCallback([this]() {
+    m_status = i18n::tr("lockscreen.unlocked");
+    m_statusIsError = false;
+    updatePromptOnSurfaces();
+    unlock();
+  });
+  // Same rules as the fingerprint status: never over a password being typed.
+  m_securityKey->setStatusCallback([this](const std::string& message, bool isError) {
+    handleFingerprintStatus(message, isError);
+  });
   return true;
 }
 
@@ -259,6 +271,7 @@ void LockScreen::unlock() {
   resetGracePeriod();
   invalidatePendingAuthentication();
   stopFingerprint();
+  stopSecurityKey();
 
   if (m_locked) {
     m_unlocking = true;
@@ -836,6 +849,7 @@ void LockScreen::handleLocked(void* data, ext_session_lock_v1* /*lock*/) {
   self->updatePromptOnSurfaces();
   self->updateIndicatorsOnSurfaces();
   self->startFingerprint();
+  self->startSecurityKey();
   kLog.info("session is locked");
   if (self->m_onSessionLocked) {
     self->m_onSessionLocked();
@@ -855,6 +869,7 @@ void LockScreen::handleFinished(void* data, ext_session_lock_v1* /*lock*/) {
   self->m_unlockFinishQueued = false;
   self->invalidatePendingAuthentication();
   self->stopFingerprint();
+  self->stopSecurityKey();
 
   if (self->m_lock != nullptr) {
     if (self->m_locked) {
@@ -1426,6 +1441,7 @@ void LockScreen::handleAuthResult(std::uint64_t generation, PamAuthenticator::Re
   m_statusIsError = true;
   updatePromptOnSurfaces();
   startFingerprint();
+  startSecurityKey();
 }
 
 void LockScreen::startFingerprint() {
@@ -1441,6 +1457,23 @@ void LockScreen::startFingerprint() {
 void LockScreen::stopFingerprint() {
   if (m_fingerprint != nullptr) {
     m_fingerprint->stop();
+  }
+}
+
+void LockScreen::startSecurityKey() {
+  if (m_securityKey == nullptr) {
+    return;
+  }
+  if (m_configService != nullptr && !m_configService->config().lockscreen.securityKey) {
+    return;
+  }
+  // Keeps running while a typed password is checked: they don't share a device.
+  m_securityKey->start();
+}
+
+void LockScreen::stopSecurityKey() {
+  if (m_securityKey != nullptr) {
+    m_securityKey->stop();
   }
 }
 
