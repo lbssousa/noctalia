@@ -138,6 +138,8 @@ class ScreenSaverService;
 class SessionBus;
 class SessionBusPollSource;
 class SoundPlayer;
+class FingerprintManager;
+class SecurityKeyManager;
 class SystemBus;
 class SystemBusPollSource;
 class SystemMonitorService;
@@ -301,6 +303,10 @@ private:
   std::unique_ptr<ModemManagerService> m_modemManagerService;
   Timer m_bluetoothResumeTimer;
   std::unique_ptr<PolkitAgent> m_polkitAgent;
+  // Back the Security page's fingerprint and security key blocks; declared before
+  // m_settingsWindow so they outlive it.
+  std::unique_ptr<FingerprintManager> m_fingerprintManager;
+  std::unique_ptr<SecurityKeyManager> m_securityKeyManager;
   std::unique_ptr<SecretPromptService> m_secretPromptService;
   std::optional<bool> m_notificationDaemonEnabled;
   bool m_notificationDaemonInitFailed = false;

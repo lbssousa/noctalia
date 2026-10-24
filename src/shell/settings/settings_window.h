@@ -11,6 +11,7 @@
 #include "shell/settings/settings_control_factory.h"
 #include "shell/settings/settings_modal_host.h"
 #include "shell/settings/settings_registry.h"
+#include "shell/settings/settings_security_hardware.h"
 #include "shell/settings/settings_sheet_modal.h"
 #include "shell/settings/widget_add_popup.h"
 #include "ui/controls/context_menu_popup.h"
@@ -42,12 +43,14 @@ class CompositorPlatform;
 class ColorPickerDialogPresenter;
 class DependencyService;
 class FileDialogPresenter;
+class FingerprintManager;
 class Flex;
 class GlyphPickerDialogPresenter;
 class IdleManager;
 class Input;
 class Label;
 class RenderContext;
+class SecurityKeyManager;
 class ThumbnailService;
 class UPowerService;
 class WaylandConnection;
@@ -119,6 +122,8 @@ public:
   }
   void setPluginManager(scripting::PluginManager* manager) { m_pluginManager = manager; }
   void setSyncGreeterAppearance(std::function<void()> callback) { m_syncGreeterAppearance = std::move(callback); }
+  // Fingerprint and security key blocks on the Security page; either may be null.
+  void setSecurityHardware(FingerprintManager* fingerprints, SecurityKeyManager* securityKeys);
   void setResetLauncherUsage(std::function<void()> callback) { m_resetLauncherUsage = std::move(callback); }
   void setResetScreenTime(std::function<void()> callback) { m_resetScreenTime = std::move(callback); }
   void setResetEncryptedStorage(std::function<void()> callback) { m_resetEncryptedStorage = std::move(callback); }
@@ -213,6 +218,12 @@ private:
   void openPluginSourceCreateEditor(std::optional<PluginSourceConfig> existing = std::nullopt);
   void openPluginSettingsEditor(std::string pluginId);
   void openPluginStore();
+  void insertSecurityHardwareEntries(const Config& cfg);
+  void openFingerprintEnrollSheet();
+  void openSecurityKeyRegisterSheet();
+  void browseGpgPublicKey();
+  void stopSecurityHardware();
+  [[nodiscard]] settings::SecurityHardwareActions securityHardwareActions(const Config& cfg);
   void openCommunityTemplateStore();
   void openPaletteInspector();
   void openBarWidgetEditorSheet(
@@ -388,4 +399,8 @@ private:
   std::function<void()> m_resetScreenTime;
   std::function<void()> m_resetEncryptedStorage;
   std::function<void()> m_saveWallpaperPaletteAsCustom;
+  FingerprintManager* m_fingerprints = nullptr;
+  SecurityKeyManager* m_securityKeys = nullptr;
+  settings::SecurityHardwareUiState m_securityHardwareState;
+  std::string m_securityKeyPin;
 };
