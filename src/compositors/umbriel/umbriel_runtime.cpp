@@ -26,7 +26,7 @@ namespace compositors::umbriel {
     constexpr auto kReconnectMax = std::chrono::seconds(30);
     constexpr std::size_t kReadBufferMaxBytes = 1024U * 1024U;
     constexpr std::string_view kEventStreamRequest =
-        R"({"cmd":"subscribe","events":["windows","overview","keyboard_layout","workspaces","outputs"]})";
+        R"({"cmd":"subscribe","events":["windows","overview","keyboard_layout","workspaces"]})";
 
     [[nodiscard]] bool waitForRequestSocket(int fd, short events, std::chrono::steady_clock::time_point deadline) {
       while (true) {
