@@ -1,3 +1,4 @@
+#include "auth/pam_authenticator.h"
 #include "config/config_types.h"
 #include "config/schema/ranges.h"
 #include "i18n/i18n.h"
@@ -127,6 +128,15 @@ namespace settings::registry {
           SettingsSection::LockScreen, "authentication", tr("settings.schema.lockscreen.fingerprint.label"),
           tr("settings.schema.lockscreen.fingerprint.description"), {"lockscreen", "fingerprint"},
           ToggleSetting{cfg.lockscreen.fingerprint}, "lock screen fingerprint fprintd biometric"
+      );
+      e.visibleWhen = lockscreenOn;
+      entries.push_back(std::move(e));
+    }
+    if (PamAuthenticator::securityKeyServiceAvailable()) {
+      auto e = makeEntry(
+          SettingsSection::LockScreen, "authentication", tr("settings.schema.lockscreen.security-key.label"),
+          tr("settings.schema.lockscreen.security-key.description"), {"lockscreen", "security_key"},
+          ToggleSetting{cfg.lockscreen.securityKey}, "lock screen security key yubikey fido2 u2f"
       );
       e.visibleWhen = lockscreenOn;
       entries.push_back(std::move(e));

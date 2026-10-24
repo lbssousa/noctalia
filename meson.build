@@ -303,13 +303,25 @@ pam_service = get_option('pam_service')
 if pam_service == '' or pam_service.contains('/') or pam_service.contains('"') or pam_service.contains('\\')
   error('pam_service must be a plain PAM service name, got "@0@"'.format(pam_service))
 endif
+# Optional second service for the security key unlock (pam_u2f). Fixed at build
+# time like pam_service: the shell only chooses between the two.
+pam_service_security_key = get_option('pam_service_security_key')
+if pam_service_security_key.contains('/') or pam_service_security_key.contains('"') or pam_service_security_key.contains('\\')
+  error('pam_service_security_key must be a plain PAM service name, got "@0@"'.format(pam_service_security_key))
+endif
+_pam_helper_security_key_args = []
+_pam_security_key_definitions = []
+if pam_service_security_key != ''
+  _pam_helper_security_key_args = ['-DNOCTALIA_PAM_SECURITY_KEY_SERVICE="' + pam_service_security_key + '"']
+  _pam_security_key_definitions = ['-DNOCTALIA_PAM_SECURITY_KEY']
+endif
 
 _noctalia_compile_definitions = [
   '-DNOCTALIA_INSTALL_PREFIX="' + get_option('prefix') + '"',
   '-DNOCTALIA_INSTALL_DATADIR="' + get_option('datadir') + '"',
   '-DNOCTALIA_PAM_HELPER="' + (get_option('prefix') / get_option('libexecdir') / 'noctalia' / 'noctalia-pam-helper') + '"',
   '-DNOCTALIA_VERSION="' + meson.project_version() + '"',
-] + jemalloc_cpp_args
+] + _pam_security_key_definitions + jemalloc_cpp_args
 
 # PipeWire's pkg-config adds -fno-strict-aliasing and -fno-strict-overflow to
 # every target that uses it. lib/ does not depend on PipeWire, so both trees set
@@ -436,6 +448,7 @@ _noctalia_sources = files(
   'src/app/single_instance_lock.cpp',
   'src/auth/fingerprint_authenticator.cpp',
   'src/auth/pam_authenticator.cpp',
+  'src/auth/security_key_authenticator.cpp',
   'src/calendar/caldav_client.cpp',
   'src/calendar/caldav_discovery.cpp',
   'src/calendar/calendar_cache.cpp',
@@ -1125,7 +1138,7 @@ executable('noctalia-pam-helper',
   cpp_args: [
     '-Wall', '-Wextra', '-Wno-missing-field-initializers', '-Wpedantic', '-Wconversion', '-Wshadow',
     '-DNOCTALIA_PAM_SERVICE="' + pam_service + '"',
-  ],
+  ] + _pam_helper_security_key_args,
   install: true,
   install_dir: get_option('libexecdir') / 'noctalia',
 )

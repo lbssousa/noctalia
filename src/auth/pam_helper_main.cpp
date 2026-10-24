@@ -3,7 +3,9 @@
 // Kept as a separate, minimal executable so distributions whose PAM stack
 // needs extra privileges for unprivileged password checks (e.g. setgid for
 // pam_tcb's password-check helper) can grant them to this helper alone, never
-// to the shell. It takes no arguments and only authenticates the invoking user.
+// to the shell. It only authenticates the invoking user, against a service
+// fixed at build time: NOCTALIA_PAM_SERVICE, or with --security-key the
+// optional NOCTALIA_PAM_SECURITY_KEY_SERVICE (see pam_helper_protocol.h).
 
 #include "auth/pam_helper_protocol.h"
 
@@ -11,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <pwd.h>
 #include <security/pam_appl.h>
 #include <string>
@@ -34,6 +37,8 @@ namespace {
   struct PamConversationData {
     const char* password = nullptr;
     bool passwordSent = false;
+    // kInfoFd when the shell asked for PAM_TEXT_INFO cues, else -1.
+    int infoFd = -1;
   };
 
   struct PamHandle {
@@ -91,8 +96,16 @@ namespace {
       case PAM_PROMPT_ECHO_ON:
         replies[i].resp = ::strdup("");
         break;
-      case PAM_ERROR_MSG:
       case PAM_TEXT_INFO:
+        // e.g. pam_u2f: an enrolled key is plugged in and waits for a touch.
+        if (data->infoFd >= 0) {
+          const char byte = 'i';
+          // Best effort: the shell may have stopped listening.
+          [[maybe_unused]] const ssize_t written = ::write(data->infoFd, &byte, 1);
+        }
+        replies[i].resp = nullptr;
+        break;
+      case PAM_ERROR_MSG:
         replies[i].resp = nullptr;
         break;
       default:
@@ -137,20 +150,20 @@ namespace {
     int pamRc = PAM_SUCCESS;
   };
 
-  [[nodiscard]] Outcome authenticate(const std::string& password) {
+  [[nodiscard]] Outcome authenticate(const std::string& password, const char* service, int infoFd) {
     const std::string user = currentUsername();
     if (user.empty()) {
       return Outcome{.status = pam_helper::Status::UserUnavailable, .pamRc = PAM_USER_UNKNOWN};
     }
 
-    PamConversationData convData{.password = password.c_str()};
+    PamConversationData convData{.password = password.c_str(), .infoFd = infoFd};
     const pam_conv conv = {
         .conv = &pamConversation,
         .appdata_ptr = &convData,
     };
 
     PamHandle pamh;
-    const int startRc = pam_start(NOCTALIA_PAM_SERVICE, user.c_str(), &conv, &pamh.h);
+    const int startRc = pam_start(service, user.c_str(), &conv, &pamh.h);
     if (startRc != PAM_SUCCESS || pamh.h == nullptr) {
       return Outcome{.status = pam_helper::Status::StartFailed, .pamRc = startRc};
     }
@@ -177,8 +190,20 @@ namespace {
 
 } // namespace
 
-int main(int argc, char* /*argv*/[]) {
-  if (argc != 1) {
+int main(int argc, char* argv[]) {
+  const char* service = NOCTALIA_PAM_SERVICE;
+  int infoFd = -1;
+  if (argc == 2 && std::strcmp(argv[1], pam_helper::kSecurityKeyArg) == 0) {
+#ifdef NOCTALIA_PAM_SECURITY_KEY_SERVICE
+    service = NOCTALIA_PAM_SECURITY_KEY_SERVICE;
+    // Only if the shell passed one: never write to an unrelated fd 3.
+    if (::fcntl(pam_helper::kInfoFd, F_GETFD) >= 0) {
+      infoFd = pam_helper::kInfoFd;
+    }
+#else
+    return pam_helper::kExitProtocolError;
+#endif
+  } else if (argc != 1) {
     return pam_helper::kExitProtocolError;
   }
 
@@ -201,7 +226,7 @@ int main(int argc, char* /*argv*/[]) {
     return pam_helper::kExitProtocolError;
   }
 
-  const Outcome outcome = authenticate(password);
+  const Outcome outcome = authenticate(password, service, infoFd);
   secureClear(password);
 
   const auto status = static_cast<std::uint8_t>(outcome.status);

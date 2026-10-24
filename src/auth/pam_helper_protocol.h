@@ -9,6 +9,12 @@
 // a newer package fail cleanly instead of misreading each other. On a version
 // mismatch the helper replies with its version only. The helper exits 0 on
 // success, 1 on a reported failure and 2 on a protocol error.
+//
+// With the single argument kSecurityKeyArg (only in builds with
+// -Dpam_service_security_key), the helper runs that service instead of the
+// lock screen one and writes one byte to kInfoFd for every PAM_TEXT_INFO
+// message (pam_u2f's cue that an enrolled key waits for a touch). Both
+// services are fixed at build time; the shell only picks one of them.
 
 #include <cerrno>
 #include <cstddef>
@@ -32,6 +38,9 @@ namespace pam_helper {
   constexpr int kExitSuccess = 0;
   constexpr int kExitFailure = 1;
   constexpr int kExitProtocolError = 2;
+
+  constexpr const char* kSecurityKeyArg = "--security-key";
+  constexpr int kInfoFd = 3;
 
   [[nodiscard]] inline bool writeAll(int fd, const void* data, std::size_t len) {
     const auto* bytes = static_cast<const std::uint8_t*>(data);

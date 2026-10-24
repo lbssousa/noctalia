@@ -25,6 +25,7 @@ class ConfigService;
 
 class CompositorPlatform;
 class FingerprintAuthenticator;
+class SecurityKeyAuthenticator;
 class HttpClient;
 class LockSurface;
 class MprisService;
@@ -151,6 +152,8 @@ private:
   void invalidatePendingAuthentication();
   void startFingerprint();
   void stopFingerprint();
+  void startSecurityKey();
+  void stopSecurityKey();
   void handleFingerprintStatus(const std::string& message, bool isError);
   static void clearSensitiveString(std::string& value);
   /// Passwordless grace window: any keypress or pointer movement beyond 5px unlocks
@@ -172,6 +175,7 @@ private:
   std::unordered_map<wl_output*, ScreencopyImage> m_desktopCaptures;
   PamAuthenticator m_authenticator;
   std::unique_ptr<FingerprintAuthenticator> m_fingerprint;
+  std::unique_ptr<SecurityKeyAuthenticator> m_securityKey;
   std::string m_user;
   std::string m_password;
   std::string m_status;

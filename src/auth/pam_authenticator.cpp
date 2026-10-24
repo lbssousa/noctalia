@@ -42,14 +42,16 @@ namespace {
     closeFd(pipeFds[1]);
   }
 
+  // Above every fd the helper gets (stdio and the info fd), so dup2() in the
+  // child never clobbers a pipe end it still needs.
   [[nodiscard]] bool moveFdAboveStdio(int& fd) {
-    if (fd > STDERR_FILENO) {
+    if (fd > pam_helper::kInfoFd) {
       return true;
     }
 
     int movedFd = -1;
     do {
-      movedFd = ::fcntl(fd, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+      movedFd = ::fcntl(fd, F_DUPFD_CLOEXEC, pam_helper::kInfoFd + 1);
     } while (movedFd < 0 && errno == EINTR);
     if (movedFd < 0) {
       return false;
@@ -180,66 +182,106 @@ PamAuthenticator::authenticateCurrentUser(std::string_view password, const Messa
   // PAM runs in a separate helper executable: the helper cannot inherit locked
   // library state from the shell's other threads, and distributions can grant
   // it the privileges their PAM stack needs without extending them to the shell.
-  const auto fail = [&messages] { return Result{.success = false, .message = messages.startFailed}; };
+  Helper helper;
+  if (!spawnHelper(helper, password, false)) {
+    return Result{.success = false, .message = messages.startFailed};
+  }
+  return finishHelper(helper, messages);
+}
 
-  if (password.size() > pam_helper::kMaxPasswordBytes) {
-    return fail();
+bool PamAuthenticator::spawnHelper(Helper& helper, std::string_view password, bool securityKey) {
+  if (password.size() > pam_helper::kMaxPasswordBytes || (securityKey && !securityKeyServiceAvailable())) {
+    return false;
   }
 
-  const std::string helperPath = resolveHelperPath();
-  if (helperPath.empty()) {
-    return fail();
+  helper.path = resolveHelperPath();
+  if (helper.path.empty()) {
+    return false;
   }
 
   int inPipe[2] = {-1, -1};
   int outPipe[2] = {-1, -1};
+  int infoPipe[2] = {-1, -1};
   if (!createPipe(inPipe)) {
-    return fail();
+    return false;
   }
-  if (!createPipe(outPipe)) {
+  if (!createPipe(outPipe) || (securityKey && !createPipe(infoPipe))) {
     closePipe(inPipe);
-    return fail();
+    closePipe(outPipe);
+    return false;
   }
 
-  const char* helperArgv[] = {kHelperName, nullptr};
+  const char* helperArgv[] = {kHelperName, securityKey ? pam_helper::kSecurityKeyArg : nullptr, nullptr};
 
   const pid_t pid = ::fork();
   if (pid < 0) {
     closePipe(inPipe);
     closePipe(outPipe);
-    return fail();
+    closePipe(infoPipe);
+    return false;
   }
 
   if (pid == 0) {
     // Keep this path async-signal-safe until execv().
-    if (::dup2(inPipe[0], STDIN_FILENO) < 0 || ::dup2(outPipe[1], STDOUT_FILENO) < 0) {
+    if (::dup2(inPipe[0], STDIN_FILENO) < 0 || ::dup2(outPipe[1], STDOUT_FILENO) < 0
+        || (infoPipe[1] >= 0 && ::dup2(infoPipe[1], pam_helper::kInfoFd) < 0)) {
       ::_exit(127);
     }
     (void)::close(inPipe[0]);
     (void)::close(inPipe[1]);
     (void)::close(outPipe[0]);
     (void)::close(outPipe[1]);
-    ::execv(helperPath.c_str(), const_cast<char* const*>(helperArgv));
+    if (infoPipe[0] >= 0) {
+      (void)::close(infoPipe[0]);
+      (void)::close(infoPipe[1]);
+    }
+    ::execv(helper.path.c_str(), const_cast<char* const*>(helperArgv));
     ::_exit(127);
   }
 
   closeFd(inPipe[0]);
   closeFd(outPipe[1]);
+  closeFd(infoPipe[1]);
 
-  const bool sentOk = sendPassword(inPipe[1], password);
+  helper.pid = pid;
+  helper.resultFd = outPipe[0];
+  helper.infoFd = infoPipe[0];
+  helper.sentOk = sendPassword(inPipe[1], password);
   closeFd(inPipe[1]);
+  return true;
+}
+
+void PamAuthenticator::cancelHelper(Helper& helper) {
+  if (helper.pid > 0) {
+    (void)::kill(helper.pid, SIGTERM);
+    int status = 0;
+    pid_t waitResult = -1;
+    do {
+      waitResult = ::waitpid(helper.pid, &status, 0);
+    } while (waitResult < 0 && errno == EINTR);
+    helper.pid = -1;
+  }
+  closeFd(helper.resultFd);
+  closeFd(helper.infoFd);
+}
+
+PamAuthenticator::Result PamAuthenticator::finishHelper(Helper& helper, const Messages& messages) {
+  const auto fail = [&messages] { return Result{.success = false, .message = messages.startFailed}; };
 
   // Read even if sending failed: a helper that rejects our protocol version
   // replies with its own before closing stdin.
   HelperReply reply;
-  const bool readOk = readReply(outPipe[0], reply);
-  closeFd(outPipe[0]);
+  const bool readOk = readReply(helper.resultFd, reply);
+  closeFd(helper.resultFd);
+  closeFd(helper.infoFd);
 
   int status = 0;
   pid_t waitResult = -1;
   do {
-    waitResult = ::waitpid(pid, &status, 0);
+    waitResult = ::waitpid(helper.pid, &status, 0);
   } while (waitResult < 0 && errno == EINTR);
+  const pid_t pid = helper.pid;
+  helper.pid = -1;
 
   const bool exited = waitResult == pid && WIFEXITED(status);
   const int exitCode = exited ? WEXITSTATUS(status) : -1;
@@ -249,14 +291,14 @@ PamAuthenticator::authenticateCurrentUser(std::string_view password, const Messa
       && ((exitCode == pam_helper::kExitSuccess) == succeeded);
   if (reply.version != 0 && reply.version != pam_helper::kProtocolVersion) {
     kLog.error(
-        "pam helper {} speaks protocol {}, expected {}; restart noctalia after an upgrade", helperPath, reply.version,
-        pam_helper::kProtocolVersion
+        "pam helper {} speaks protocol {}, expected {}; restart noctalia after an upgrade", helper.path,
+        reply.version, pam_helper::kProtocolVersion
     );
     return fail();
   }
-  if (!sentOk || !statusOk) {
+  if (!helper.sentOk || !statusOk) {
     kLog.warn(
-        "pam helper {} failed (sent={} read={} waited={} exited={} status={})", helperPath, sentOk, readOk,
+        "pam helper {} failed (sent={} read={} waited={} exited={} status={})", helper.path, helper.sentOk, readOk,
         waitResult == pid, exited, exitCode
     );
     return fail();

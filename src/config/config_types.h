@@ -623,6 +623,9 @@ struct LockscreenConfig {
   // and on logind resume as a defense in depth.
   int gracePeriodSeconds = 0;
   bool fingerprint = true;
+  // Unlock with a touch on a FIDO2 key, through the PAM service set with
+  // -Dpam_service_security_key (pam_u2f); no effect in builds without one.
+  bool securityKey = true;
   bool allowEmptyPassword = false;
   bool blurredDesktop = false;
   std::vector<LockscreenTransition> transitions = {LockscreenTransition::Fade,    LockscreenTransition::Wipe,
