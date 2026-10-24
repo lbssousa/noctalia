@@ -875,8 +875,8 @@
     "password-cleared": "Password cleared",
     "password-placeholder": "Password",
     "ready": "Type your password and press Enter.",
-    "security-key-touch": "Touch your security key",
     "unlocked": "Unlocked",
+    "use-password": "Use password",
     "waiting": "Waiting for lock confirmation…"
   },
   "notifications": {
@@ -2499,7 +2499,7 @@
         },
         "security-key": {
           "label": "Security Key Unlock",
-          "description": "Unlock with a touch on a FIDO2 security key (pam_u2f), alongside password entry"
+          "description": "Unlock with a touch on a FIDO2 security key (pam_u2f), after the fingerprint and before the password"
         },
         "tint-intensity": {
           "description": "Surface-color tint over the lock screen background",

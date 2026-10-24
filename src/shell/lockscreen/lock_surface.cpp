@@ -43,6 +43,12 @@
 
 namespace {
 
+  using auth_text::AuthCue;
+
+  // Same glyph size as the polkit panel's fingerprint/security-key cue.
+  constexpr float kCueGlyphSize = 72.0F;
+  constexpr int kCueDetailLines = 2;
+
   constexpr Logger kLog("lockscreen");
 
   const ext_session_lock_surface_v1_listener kLockSurfaceListener = {
@@ -448,6 +454,57 @@ LockSurface::LockSurface(WaylandConnection& connection, ConfigService* config) :
       })
   );
 
+  // Cue card: like the auth panel, floats above (or below) the login box. Shown
+  // instead of the password field while the fingerprint or the security key is asked for.
+  m_root.addChild(
+      ui::flex(
+          FlexDirection::Vertical,
+          {
+              .out = &m_cuePanel,
+              .align = FlexAlign::Center,
+              .justify = FlexJustify::Center,
+              .gap = Style::spaceSm,
+              .paddingV = Style::spaceMd,
+              .paddingH = Style::spaceMd,
+              .widthPolicy = FlexSizePolicy::Fill,
+              .heightPolicy = FlexSizePolicy::Content,
+              .visible = false,
+              .participatesInLayout = false,
+              .configure = [](Flex& flex) { flex.setZIndex(7); },
+          }
+      )
+  );
+  m_cuePanel->addChild(
+      ui::glyph({
+          .out = &m_cueGlyph,
+          .glyph = "fingerprint",
+          .glyphSize = kCueGlyphSize,
+          .color = colorSpecFromRole(ColorRole::Primary),
+          .configure = [](Glyph& glyph) { glyph.setZIndex(2); },
+      })
+  );
+  m_cuePanel->addChild(
+      ui::label({
+          .out = &m_cueTitle,
+          .fontSize = Style::fontSizeTitle,
+          .fontWeight = FontWeight::Bold,
+          .color = colorSpecFromRole(ColorRole::OnSurface),
+          .maxLines = 1,
+          .textAlign = TextAlign::Center,
+          .configure = [](Label& label) { label.setZIndex(2); },
+      })
+  );
+  m_cuePanel->addChild(
+      ui::label({
+          .out = &m_cueDetail,
+          .fontSize = Style::fontSizeBody,
+          .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
+          .maxLines = kCueDetailLines,
+          .textAlign = TextAlign::Center,
+          .configure = [](Label& label) { label.setZIndex(2); },
+      })
+  );
+
   m_loginPanel->addChild(
       ui::flex(
           FlexDirection::Horizontal,
@@ -541,6 +598,27 @@ LockSurface::LockSurface(WaylandConnection& connection, ConfigService* config) :
                 }
               },
           .configure = [](Button& button) { button.setZIndex(2); },
+      })
+  );
+
+  m_loginContentRow->addChild(
+      ui::button({
+          .out = &m_usePasswordButton,
+          .text = i18n::tr("lockscreen.use-password"),
+          .glyph = "password",
+          .variant = ButtonVariant::Secondary,
+          .visible = false,
+          .onClick =
+              [this]() {
+                if (m_onUsePassword) {
+                  m_onUsePassword();
+                }
+              },
+          .configure =
+              [](Button& button) {
+                button.setZIndex(2);
+                button.setFlexGrow(1.0F);
+              },
       })
   );
 
@@ -711,6 +789,19 @@ void LockSurface::setPromptState(
   m_error = error;
   m_authenticating = authenticating;
   requestUpdate();
+}
+
+void LockSurface::setAuthStage(AuthCue stage) {
+  if (m_authStage == stage) {
+    return;
+  }
+  m_authStage = stage;
+  if (stage == AuthCue::None) {
+    focusPasswordField();
+  } else {
+    m_inputDispatcher.setFocus(nullptr);
+  }
+  requestLayout();
 }
 
 void LockSurface::setKeyboardIndicators(
@@ -951,6 +1042,10 @@ void LockSurface::setOnPasswordChanged(std::function<void(const std::string&)> o
   m_onPasswordChanged = std::move(onPasswordChanged);
 }
 
+void LockSurface::setOnUsePassword(std::function<void()> onUsePassword) {
+  m_onUsePassword = std::move(onUsePassword);
+}
+
 void LockSurface::selectAllPassword() {
   if (m_passwordField == nullptr) {
     return;
@@ -1083,6 +1178,7 @@ void LockSurface::layoutCoverOnly(std::uint32_t width, std::uint32_t height) {
   m_widgetLayer->setVisible(false);
   m_loginPanel->setVisible(false);
   m_authPanel->setVisible(false);
+  m_cuePanel->setVisible(false);
   layoutTransitionCover();
   syncTransitionCover();
 }
@@ -1235,6 +1331,12 @@ void LockSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
     if (m_authPanel != nullptr) {
       m_authPanel->setVisible(false);
     }
+    if (m_cuePanel != nullptr) {
+      m_cuePanel->setVisible(false);
+    }
+    if (m_usePasswordButton != nullptr) {
+      m_usePasswordButton->setVisible(false);
+    }
     layoutTransitionCover();
     syncTransitionCover();
     return;
@@ -1249,16 +1351,18 @@ void LockSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
   const lockscreen_login_box::LoginBoxStyle loginStyle = resolveLoginStyle();
   m_loginPanel->setVisible(loginVisible);
   m_loginContentRow->setVisible(loginVisible);
-  m_passwordField->setVisible(loginVisible);
+  const bool cueStage = m_authStage != AuthCue::None;
+  m_passwordField->setVisible(loginVisible && !cueStage);
+  m_usePasswordButton->setVisible(loginVisible && cueStage);
   if (m_passwordRevealButton != nullptr) {
-    const bool showReveal = loginVisible && loginStyle.showPasswordReveal;
+    const bool showReveal = loginVisible && !cueStage && loginStyle.showPasswordReveal;
     m_passwordRevealButton->setVisible(showReveal);
     if (!showReveal) {
       m_passwordField->setPasswordRevealed(false);
       m_passwordRevealButton->setGlyph("eye");
     }
   }
-  m_loginButton->setVisible(loginVisible && loginStyle.showLoginButton);
+  m_loginButton->setVisible(loginVisible && !cueStage && loginStyle.showLoginButton);
 
   const bool regular = loginVisible && loginStyle.layout == lockscreen_login_box::LayoutMode::Regular;
   ensureLayoutChipInPasswordRow();
@@ -1517,7 +1621,7 @@ void LockSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
   m_passwordField->setControlHeight(controlHeight);
   m_passwordField->setFontSize(bodySize);
 
-  const bool showLoginButton = loginVisible && loginStyle.showLoginButton;
+  const bool showLoginButton = loginVisible && !cueStage && loginStyle.showLoginButton;
   m_loginButton->setVisible(showLoginButton);
   if (showLoginButton) {
     m_loginButton->setRadius(Style::scaledRadius(loginStyle.inputRadius));
@@ -1531,13 +1635,21 @@ void LockSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
     m_passwordRevealButton->setGlyphSize(sessionGlyphSize);
   }
 
+  if (cueStage) {
+    m_usePasswordButton->setRadius(Style::scaledRadius(loginStyle.inputRadius));
+    m_usePasswordButton->setMinHeight(controlHeight);
+    m_usePasswordButton->setMaxHeight(controlHeight);
+    m_usePasswordButton->setFontSize(bodySize);
+    m_usePasswordButton->setGlyphSize(sessionGlyphSize);
+  }
+
   m_loginPanel->arrange(renderer, LayoutRect{panelX, panelY, panelWidth, panelHeight});
 
   // Auth panel: sibling above/below the login box (flips below when near the top edge).
   if (m_authPanel != nullptr && m_authLabel != nullptr) {
     bool statusError = false;
     const std::string authText = resolveStatusText(loginStyle, statusError);
-    const bool showAuth = m_locked && !m_blackout && loginVisible && !authText.empty();
+    const bool showAuth = m_locked && !m_blackout && loginVisible && !cueStage && !authText.empty();
     m_authPanel->setVisible(showAuth);
     m_authLabel->setVisible(showAuth);
     if (showAuth) {
@@ -1572,11 +1684,76 @@ void LockSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
       m_authPanel->arrange(renderer, LayoutRect{authX, authY, authW, authH});
     }
   }
+  // Cue card: same chrome and placement as the auth panel, which it replaces.
+  if (m_cuePanel != nullptr) {
+    const bool showCue = m_locked && !m_blackout && loginVisible && cueStage;
+    m_cuePanel->setVisible(showCue);
+    if (showCue) {
+      updateCueCard();
+      const float scale = regular ? contentScale : 1.0F;
+      const float glyphSize = kCueGlyphSize * scale;
+      const float titleSize = Style::fontSizeTitle * scale;
+      const float detailSize = Style::fontSizeBody * scale;
+      const float padV = Style::spaceMd * scale;
+      const float padH = Style::spaceMd * scale;
+      const float gap = Style::spaceSm * scale;
+      const float cueW = panelWidth;
+      const float cueH = padV * 2.0F
+          + glyphSize
+          + gap * 2.0F
+          + titleSize * 1.35F
+          + detailSize * 1.35F * static_cast<float>(kCueDetailLines);
+      const float textMaxW = std::max(0.0F, cueW - padH * 2.0F);
+
+      m_cueGlyph->setGlyphSize(glyphSize);
+      m_cueTitle->setFontSize(titleSize);
+      m_cueTitle->setMaxWidth(textMaxW);
+      m_cueTitle->setEllipsize(TextEllipsize::End);
+      m_cueDetail->setFontSize(detailSize);
+      m_cueDetail->setMaxWidth(textMaxW);
+      m_cueDetail->setEllipsize(TextEllipsize::End);
+
+      m_cuePanel->setGap(gap);
+      m_cuePanel->setPadding(padV, padH);
+      m_cuePanel->setFill(loginStyle.panelFill);
+      m_cuePanel->setBorder(colorForRole(ColorRole::Outline, loginStyle.panelOpacity), Style::borderWidth);
+      m_cuePanel->setRadius(Style::scaledRadius(loginStyle.panelRadius));
+      m_cuePanel->setSoftness(1.0F);
+      m_cuePanel->setMinWidth(cueW);
+      m_cuePanel->setMaxWidth(cueW);
+      m_cuePanel->setMinHeight(cueH);
+      m_cuePanel->setMaxHeight(cueH);
+
+      const float cueGap = Style::spaceSm;
+      const float cueYAbove = panelY - cueGap - cueH;
+      const float cueYBelow = panelY + panelHeight + cueGap;
+      const float cueY = (cueYAbove >= Style::spaceLg) ? cueYAbove : cueYBelow;
+      m_cuePanel->arrange(renderer, LayoutRect{panelX, cueY, cueW, cueH});
+    }
+  }
   layoutTransitionCover();
   syncTransitionCover();
 }
 
+void LockSurface::updateCueCard() {
+  if (m_cueGlyph == nullptr || m_cueTitle == nullptr || m_cueDetail == nullptr || m_authStage == AuthCue::None) {
+    return;
+  }
+  const bool fingerprint = m_authStage == AuthCue::Fingerprint;
+  m_cueGlyph->setGlyph(fingerprint ? "fingerprint" : "key");
+  m_cueGlyph->setColor(colorSpecFromRole(m_error ? ColorRole::Error : ColorRole::Primary));
+  m_cueTitle->setText(i18n::tr(fingerprint ? "auth.polkit.fingerprint.title" : "auth.polkit.security-key.title"));
+  // The reader's own messages ("did not match", "reading…") win over the instruction.
+  m_cueDetail->setText(
+      !m_status.empty()
+          ? m_status
+          : i18n::tr(fingerprint ? "auth.polkit.fingerprint.detail" : "auth.polkit.security-key.detail")
+  );
+  m_cueDetail->setColor(colorSpecFromRole(m_error ? ColorRole::Error : ColorRole::OnSurfaceVariant));
+}
+
 void LockSurface::updateCopy() {
+  updateCueCard();
   m_passwordField->setValue(m_password);
   m_passwordField->setEnabled(!m_authenticating);
   if (m_passwordRevealButton != nullptr) {
@@ -1596,7 +1773,8 @@ void LockSurface::updateCopy() {
   if (m_authPanel != nullptr && m_authLabel != nullptr) {
     bool isError = false;
     const std::string text = resolveStatusText(style, isError);
-    const bool show = m_locked && !m_blackout && !text.empty() && isLoginBoxEnabled();
+    const bool show =
+        m_locked && !m_blackout && m_authStage == AuthCue::None && !text.empty() && isLoginBoxEnabled();
     m_authPanel->setVisible(show);
     m_authLabel->setVisible(show);
     if (show) {
@@ -1607,7 +1785,12 @@ void LockSurface::updateCopy() {
 
   if (m_layoutChip != nullptr) {
     const bool show =
-        m_locked && !m_blackout && style.showKeyboardLayout && m_hasMultipleLayouts && isLoginBoxEnabled();
+        m_locked
+        && !m_blackout
+        && m_authStage == AuthCue::None
+        && style.showKeyboardLayout
+        && m_hasMultipleLayouts
+        && isLoginBoxEnabled();
     m_layoutChip->setVisible(show);
     if (show) {
       m_layoutChip->setGlyph("keyboard");

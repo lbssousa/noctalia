@@ -30,6 +30,10 @@ namespace {
   // Retries after the first scan: 3 attempts in all, like pam_fprintd max-tries=3.
   constexpr int kMaxRetries = 2;
   constexpr auto kRetryDelay = std::chrono::milliseconds(250);
+  // After a resume, how long a PermissionDenied is blamed on the session not being active yet.
+  constexpr auto kResumeWindow = std::chrono::seconds(5);
+  constexpr auto kResumeRetryDelay = std::chrono::seconds(1);
+  constexpr int kMaxResumeRetries = 3;
 
   enum class MatchResult {
     Invalid,
@@ -63,6 +67,10 @@ namespace {
     // recreating+reclaiming. Other VerifyStart failures are permanent for this lock attempt.
     return error.getName() == sdbus::Error::Name{"net.reactivated.Fprint.Error.ClaimDevice"};
   }
+
+  bool isPermissionDenied(const sdbus::Error& error) {
+    return error.getName() == sdbus::Error::Name{"net.reactivated.Fprint.Error.PermissionDenied"};
+  }
 } // namespace
 
 FingerprintAuthenticator::FingerprintAuthenticator(SystemBus& bus) : m_bus(bus) {
@@ -79,8 +87,12 @@ FingerprintAuthenticator::FingerprintAuthenticator(SystemBus& bus) : m_bus(bus) 
         // refuses to run while m_sleeping, so only the re-arm state needs clearing.
         m_retryTimer.stop();
         m_verifying = false;
-      } else if (m_active && !m_abort) {
-        startVerify(false);
+      } else {
+        m_resumedAt = std::chrono::steady_clock::now();
+        m_resumeRetries = 0;
+        if (m_active && !m_abort) {
+          startVerify(false);
+        }
       }
     });
   } catch (const sdbus::Error& e) {
@@ -96,6 +108,10 @@ void FingerprintAuthenticator::setAuthenticatedCallback(AuthenticatedCallback ca
 }
 
 void FingerprintAuthenticator::setStatusCallback(StatusCallback callback) { m_onStatus = std::move(callback); }
+
+void FingerprintAuthenticator::setUnavailableCallback(UnavailableCallback callback) {
+  m_onUnavailable = std::move(callback);
+}
 
 void FingerprintAuthenticator::start() {
   if (m_active) {
@@ -183,6 +199,10 @@ void FingerprintAuthenticator::claimDevice() {
         if (e.has_value()) {
           kLog.info("could not claim fingerprint device: {}", e->what());
           m_verifying = false;
+          if (retryAfterResume(*e, [this]() { claimDevice(); })) {
+            return;
+          }
+          emitUnavailable();
           return;
         }
         kLog.info("claimed fingerprint device");
@@ -201,6 +221,7 @@ void FingerprintAuthenticator::startVerify(bool isRetry) {
   if (m_device == nullptr) {
     if (!createDeviceProxy()) {
       m_verifying = false;
+      emitUnavailable();
       return;
     }
 
@@ -230,7 +251,11 @@ void FingerprintAuthenticator::startVerify(bool isRetry) {
             });
             return;
           }
+          if (retryAfterResume(*e, [this]() { startVerify(false); })) {
+            return;
+          }
           emitStatus({}, false); // issue loading: drop the status message
+          emitUnavailable();
           return;
         }
         kLog.debug("fingerprint verification started");
@@ -300,6 +325,7 @@ void FingerprintAuthenticator::handleVerifyStatus(const std::string& result, boo
     ownsRestart = true;
     if (m_retries >= kMaxRetries) {
       emitStatus(i18n::tr("auth.fingerprint.too-many-attempts"), true);
+      emitUnavailable();
     } else {
       emitStatus(i18n::tr("auth.fingerprint.no-match"), true);
       // rearm after a short delay
@@ -326,12 +352,14 @@ void FingerprintAuthenticator::handleVerifyStatus(const std::string& result, boo
     stopVerify();
     m_abort = true;
     emitStatus(i18n::tr("auth.fingerprint.disconnected"), true);
+    emitUnavailable();
     break;
   case MatchResult::UnknownError:
     stopVerify();
     ownsRestart = true;
     if (m_retries >= kMaxRetries) {
       emitStatus(i18n::tr("auth.fingerprint.too-many-attempts"), true);
+      emitUnavailable();
     } else {
       emitStatus(i18n::tr("auth.fingerprint.error"), true);
       m_retryTimer.start(kRetryDelay, [this]() { startVerify(true); });
@@ -356,4 +384,29 @@ void FingerprintAuthenticator::emitStatus(const std::string& message, bool isErr
   if (m_onStatus) {
     m_onStatus(message, isError);
   }
+}
+
+void FingerprintAuthenticator::emitUnavailable() {
+  if (m_active && m_onUnavailable) {
+    m_onUnavailable();
+  }
+}
+
+bool FingerprintAuthenticator::retryAfterResume(const sdbus::Error& error, std::function<void()> retry) {
+  if (!isPermissionDenied(error)
+      || m_resumeRetries >= kMaxResumeRetries
+      || std::chrono::steady_clock::now() - m_resumedAt > kResumeWindow
+      || !m_active
+      || m_sleeping
+      || m_abort) {
+    return false;
+  }
+  ++m_resumeRetries;
+  kLog.info("fingerprint device not authorized yet after resume; retrying");
+  m_retryTimer.start(kResumeRetryDelay, [this, retry = std::move(retry)]() {
+    if (m_active && !m_sleeping && !m_abort) {
+      retry();
+    }
+  });
+  return true;
 }

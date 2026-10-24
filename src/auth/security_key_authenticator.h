@@ -1,19 +1,21 @@
 #pragma once
 
-#include <atomic>
 #include <functional>
 #include <memory>
-#include <string>
 #include <thread>
 
 // Waits for a touch on a FIDO2 security key: runs the PAM helper on the
-// "noctalia-lock-u2f" service (pam_u2f) in the background, alongside the
-// password field and the fingerprint reader, and again whenever a hidraw
-// device shows up.
+// "noctalia-lock-u2f" service (pam_u2f) in the background. One attempt, unless
+// started to watch for hotplug: then it waits for a hidraw device to show up
+// before each attempt, until stopped.
 class SecurityKeyAuthenticator {
 public:
   using AuthenticatedCallback = std::function<void()>;
-  using StatusCallback = std::function<void(const std::string& message, bool isError)>;
+  // pam_u2f found an enrolled key and waits for a touch.
+  using CueCallback = std::function<void()>;
+  // The attempt ended without an unlock; `cued` tells whether a touch was asked for
+  // (it timed out or the key went away) or no enrolled key was plugged in.
+  using GaveUpCallback = std::function<void(bool cued)>;
 
   SecurityKeyAuthenticator() = default;
   ~SecurityKeyAuthenticator();
@@ -22,22 +24,22 @@ public:
   SecurityKeyAuthenticator& operator=(const SecurityKeyAuthenticator&) = delete;
 
   void setAuthenticatedCallback(AuthenticatedCallback callback);
-  void setStatusCallback(StatusCallback callback);
+  void setCueCallback(CueCallback callback);
+  void setGaveUpCallback(GaveUpCallback callback);
 
-  void start();
+  // Restarts the worker. With `watchHotplug`, every attempt waits for a hidraw device first.
+  void start(bool watchHotplug);
   void stop();
 
 private:
-  void run(std::string language, std::weak_ptr<void> token);
-  void runAttempts(int cancelFd, const std::string& language, const std::weak_ptr<void>& token);
+  void runAttempts(int cancelFd, const std::string& language, const std::weak_ptr<void>& token, bool watchHotplug);
   void post(std::weak_ptr<void> token, std::function<void(SecurityKeyAuthenticator&)> fn);
 
   AuthenticatedCallback m_onAuthenticated;
-  StatusCallback m_onStatus;
+  CueCallback m_onCue;
+  GaveUpCallback m_onGaveUp;
 
   std::thread m_worker;
-  // False once the worker has returned on its own (after a successful touch).
-  std::atomic<bool> m_running = false;
   // Wakes the worker up to stop it.
   int m_cancelFd = -1;
   // Replaced on every start(); results from an older run are dropped.

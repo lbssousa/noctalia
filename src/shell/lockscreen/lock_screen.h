@@ -4,6 +4,7 @@
 #include "capture/screencopy_capture.h"
 #include "core/timer_manager.h"
 #include "render/core/lockscreen_transition_types.h"
+#include "shell/auth_text.h"
 
 #include <cstdint>
 #include <functional>
@@ -148,10 +149,18 @@ private:
   void tryAuthenticate();
   void handleAuthResult(std::uint64_t generation, PamAuthenticator::Result result);
   void invalidatePendingAuthentication();
-  void startFingerprint();
   void stopFingerprint();
-  void startSecurityKey();
   void stopSecurityKey();
+  /// Unlock methods in turn: fingerprint, then security key, then password.
+  /// Starts over at the first one enabled.
+  void beginAuthSequence();
+  /// Switches to `stage` (None = password) and starts its authenticator. With
+  /// `keyAlreadyCued`, the security key attempt that asked for the touch keeps running.
+  void enterAuthStage(auth_text::AuthCue stage, bool keyAlreadyCued = false);
+  /// Leaves `from` for the next stage, unless the lock screen moved on already.
+  void advanceAuthStage(auth_text::AuthCue from);
+  [[nodiscard]] bool fingerprintEnabled() const;
+  [[nodiscard]] bool securityKeyEnabled() const;
   void handleFingerprintStatus(const std::string& message, bool isError);
   static void clearSensitiveString(std::string& value);
   /// Passwordless grace window: any keypress or pointer movement beyond 5px unlocks
@@ -174,6 +183,10 @@ private:
   std::string m_user;
   std::string m_password;
   std::string m_status;
+  auth_text::AuthCue m_authStage = auth_text::AuthCue::None;
+  // Bumped on every stage change; deferred stage advances from an older stage are dropped.
+  std::uint64_t m_authStageGeneration = 0;
+  Timer m_fingerprintStageTimer;
   wl_surface* m_pointerSurface = nullptr;
   bool m_statusIsError = false;
   bool m_authenticating = false;
