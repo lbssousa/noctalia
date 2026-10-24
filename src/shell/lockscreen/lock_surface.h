@@ -10,6 +10,7 @@
 #include "render/core/texture_manager.h"
 #include "render/scene/input_dispatcher.h"
 #include "render/scene/node.h"
+#include "shell/auth_text.h"
 #include "shell/lockscreen/lockscreen_login_box.h"
 #include "wayland/surface.h"
 
@@ -56,6 +57,8 @@ public:
   bool initialize(ext_session_lock_v1* lock, wl_output* output, std::int32_t scale);
   void setLockedState(bool locked);
   void setPromptState(std::string user, std::string password, std::string status, bool error, bool authenticating);
+  /// Fingerprint or security key: a cue card replaces the password field. None: the password field.
+  void setAuthStage(auth_text::AuthCue stage);
   void setKeyboardIndicators(bool capsLock, bool hasMultipleLayouts, bool layoutSwitchable, std::string layoutLabel);
   void setTextureCache(SharedTextureCache* cache) noexcept { m_textureCache = cache; }
   void setWallpaperPath(std::string wallpaperPath);
@@ -78,6 +81,7 @@ public:
   void setOnLogin(std::function<void()> onLogin);
   void setOnCycleLayout(std::function<void()> onCycleLayout);
   void setOnPasswordChanged(std::function<void(const std::string&)> onPasswordChanged);
+  void setOnUsePassword(std::function<void()> onUsePassword);
   void setLoginBoxServices(
       SessionActionRunner* sessionActions, MprisService* mpris, const WeatherService* weather, HttpClient* httpClient
   );
@@ -151,6 +155,7 @@ private:
   [[nodiscard]] lockscreen_login_box::LoginBoxStyle resolveLoginStyle() const;
   [[nodiscard]] bool isLoginBoxEnabled() const;
   [[nodiscard]] std::string resolveStatusText(const lockscreen_login_box::LoginBoxStyle& style, bool& isError) const;
+  void updateCueCard();
   [[nodiscard]] bool passwordFieldContainsPoint(float sceneX, float sceneY) const;
   void focusPasswordField();
 
@@ -186,6 +191,11 @@ private:
   Flex* m_authPanel = nullptr;
   Label* m_authLabel = nullptr;
   Flex* m_loginContentRow = nullptr;
+  Flex* m_cuePanel = nullptr;
+  Glyph* m_cueGlyph = nullptr;
+  Label* m_cueTitle = nullptr;
+  Label* m_cueDetail = nullptr;
+  Button* m_usePasswordButton = nullptr;
   Input* m_passwordField = nullptr;
   Button* m_passwordRevealButton = nullptr;
   Button* m_loginButton = nullptr;
@@ -226,6 +236,8 @@ private:
   std::function<void()> m_onLogin;
   std::function<void()> m_onCycleLayout;
   std::function<void(const std::string&)> m_onPasswordChanged;
+  std::function<void()> m_onUsePassword;
+  auth_text::AuthCue m_authStage = auth_text::AuthCue::None;
   bool m_locked = false;
   std::string m_user;
   std::string m_password;

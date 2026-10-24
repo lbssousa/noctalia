@@ -2,6 +2,7 @@
 
 #include "core/timer_manager.h"
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -9,6 +10,7 @@
 class SystemBus;
 
 namespace sdbus {
+  class Error;
   class IProxy;
 }
 
@@ -16,6 +18,8 @@ class FingerprintAuthenticator {
 public:
   using AuthenticatedCallback = std::function<void()>;
   using StatusCallback = std::function<void(const std::string& message, bool isError)>;
+  // No reader, a reader that cannot be used, or attempts exhausted: nothing more to wait for.
+  using UnavailableCallback = std::function<void()>;
 
   explicit FingerprintAuthenticator(SystemBus& bus);
   ~FingerprintAuthenticator();
@@ -25,6 +29,7 @@ public:
 
   void setAuthenticatedCallback(AuthenticatedCallback callback);
   void setStatusCallback(StatusCallback callback);
+  void setUnavailableCallback(UnavailableCallback callback);
 
   void start();
   void stop();
@@ -37,6 +42,9 @@ private:
   void releaseDevice();
   void handleVerifyStatus(const std::string& result, bool done);
   void emitStatus(const std::string& message, bool isError);
+  void emitUnavailable();
+  // polkit refuses the reader until logind marks the session active again after a resume.
+  [[nodiscard]] bool retryAfterResume(const sdbus::Error& error, std::function<void()> retry);
 
   SystemBus& m_bus;
   std::unique_ptr<sdbus::IProxy> m_loginManager;
@@ -44,6 +52,7 @@ private:
 
   AuthenticatedCallback m_onAuthenticated;
   StatusCallback m_onStatus;
+  UnavailableCallback m_onUnavailable;
 
   Timer m_retryTimer;
 
@@ -54,4 +63,6 @@ private:
   bool m_abort = false;
   bool m_reclaimAttempted = false;
   int m_retries = 0;
+  std::chrono::steady_clock::time_point m_resumedAt{};
+  int m_resumeRetries = 0;
 };
