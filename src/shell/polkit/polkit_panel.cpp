@@ -249,6 +249,14 @@ void PolkitPanel::create() {
                   },
           }),
           ui::button({
+              .out = &m_usePasswordButton,
+              .text = i18n::tr("auth.polkit.use-password"),
+              .glyph = "password",
+              .variant = ButtonVariant::Secondary,
+              .visible = false,
+              .onClick = [this]() { usePassword(); },
+          }),
+          ui::button({
               .out = &m_submitButton,
               .text = i18n::tr("auth.polkit.authenticate"),
               .variant = ButtonVariant::Primary,
@@ -299,6 +307,7 @@ void PolkitPanel::onClose() {
   m_input = nullptr;
   m_submitButton = nullptr;
   m_cancelButton = nullptr;
+  m_usePasswordButton = nullptr;
   m_iconContainer = nullptr;
   m_icon = nullptr;
   m_fallbackIcon = nullptr;
@@ -316,8 +325,23 @@ void PolkitPanel::cancelAuth() {
   }
 }
 
+void PolkitPanel::usePassword() {
+  PolkitAgent* agent = m_agentProvider != nullptr ? m_agentProvider() : nullptr;
+  if (agent != nullptr && agent->hasPendingRequest()) {
+    agent->usePassword();
+  }
+}
+
 bool PolkitPanel::handleGlobalKey(std::uint32_t sym, std::uint32_t modifiers, bool pressed, bool /*preedit*/) {
-  if (!pressed || !KeybindMatcher::matches(KeybindAction::Cancel, sym, modifiers)) {
+  if (!pressed) {
+    return false;
+  }
+  // Enter (or Space) is the "use password" button while the cue is up.
+  if (m_lastCue != AuthCue::None && KeybindMatcher::matches(KeybindAction::Validate, sym, modifiers)) {
+    usePassword();
+    return true;
+  }
+  if (!KeybindMatcher::matches(KeybindAction::Cancel, sym, modifiers)) {
     return false;
   }
   cancelAuth();
@@ -362,7 +386,8 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
       || m_input == nullptr
       || m_icon == nullptr
       || m_fallbackIcon == nullptr
-      || m_cueBox == nullptr) {
+      || m_cueBox == nullptr
+      || m_usePasswordButton == nullptr) {
     return;
   }
   const PolkitRequest request = agent->pendingRequest();
@@ -399,6 +424,7 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
   m_input->setVisible(needsInput);
   m_submitButton->setVisible(needsInput);
   m_submitButton->setEnabled(needsInput && !m_input->value().empty());
+  m_usePasswordButton->setVisible(cue != AuthCue::None);
   if (needsInput != m_lastResponseRequired || cue != m_lastCue) {
     if (auto* manager = PanelManager::current(); manager != nullptr && manager->isOpenPanel("polkit")) {
       manager->relayoutActivePanelPreferredSize();

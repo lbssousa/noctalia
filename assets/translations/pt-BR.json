@@ -31,7 +31,8 @@
         "detail": "Toque no contato da chave quando a luz piscar",
         "title": "Toque na sua chave de segurança"
       },
-      "title": "Autenticação necessária"
+      "title": "Autenticação necessária",
+      "use-password": "Usar senha"
     },
     "secret-prompt": {
       "answer-placeholder": "Resposta",

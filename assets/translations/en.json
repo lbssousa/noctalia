@@ -31,7 +31,8 @@
         "detail": "Touch the key's contact when its light blinks",
         "title": "Touch your security key"
       },
-      "title": "Authentication Required"
+      "title": "Authentication Required",
+      "use-password": "Use password"
     },
     "secret-prompt": {
       "answer-placeholder": "Answer",

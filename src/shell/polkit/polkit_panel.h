@@ -43,6 +43,7 @@ private:
   void doUpdate(Renderer& renderer) override;
   void submit(std::string_view response = {});
   void cancelAuth();
+  void usePassword();
   bool handleInputKeyEvent(std::uint32_t sym, std::uint32_t modifiers);
   void resolveIcon(Renderer& renderer, const PolkitRequest& request);
   void updateCue(auth_text::AuthCue cue, bool isError, const std::string& rawMessage);
@@ -58,6 +59,7 @@ private:
   Input* m_input = nullptr;
   Button* m_submitButton = nullptr;
   Button* m_cancelButton = nullptr;
+  Button* m_usePasswordButton = nullptr;
   Node* m_iconContainer = nullptr;
   Image* m_icon = nullptr;
   Glyph* m_fallbackIcon = nullptr;
