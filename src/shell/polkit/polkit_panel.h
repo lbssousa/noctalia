@@ -1,5 +1,6 @@
 #pragma once
 
+#include "shell/auth_text.h"
 #include "shell/panel/panel.h"
 #include "system/icon_resolver.h"
 #include "ui/signal.h"
@@ -50,6 +51,7 @@ private:
   bool handleInputKeyEvent(std::uint32_t sym, std::uint32_t modifiers);
   void resolveIcon(Renderer& renderer, const PolkitRequest& request);
   void loadIcon(Renderer& renderer, const std::string& path, float iconSize);
+  void updateCue(auth_text::AuthCue cue, bool isError, const std::string& rawMessage);
 
   ConfigService* m_config = nullptr;
   Signal<>::ScopedConnection m_appIconColorizeConn;
@@ -66,11 +68,16 @@ private:
   Node* m_iconContainer = nullptr;
   Image* m_icon = nullptr;
   Glyph* m_fallbackIcon = nullptr;
+  Flex* m_cueBox = nullptr;
+  Glyph* m_cueGlyph = nullptr;
+  Label* m_cueTitle = nullptr;
+  Label* m_cueDetail = nullptr;
   IconResolver m_iconResolver;
   std::string m_lastIconName;
   bool m_iconResolved = false;
   bool m_iconIsAppIcon = false;
   bool m_lastResponseRequired = false;
+  auth_text::AuthCue m_lastCue = auth_text::AuthCue::None;
   std::string m_trackedRequestCookie;
   bool m_hasTrackedRequest = false;
 };
