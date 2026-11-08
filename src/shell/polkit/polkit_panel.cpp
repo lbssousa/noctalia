@@ -43,6 +43,17 @@ namespace {
     return out;
   }
 
+  using auth_text::AuthCue;
+  using auth_text::classifyPamMessage;
+
+  constexpr float kCueGlyphSize = 72.0F;
+
+  // Fingerprint or security-key cue, shown while PAM waits for something other
+  // than a typed answer.
+  AuthCue pendingCue(bool needsInput, const std::string& supplementary) {
+    return needsInput ? AuthCue::None : classifyPamMessage(supplementary);
+  }
+
 } // namespace
 
 PolkitPanel::PolkitPanel(ConfigService* config, std::function<PolkitAgent*()> agentProvider)
@@ -118,6 +129,37 @@ void PolkitPanel::create() {
   );
   root->addChild(std::move(topContent));
 
+  root->addChild(ui::column(
+      {
+          .out = &m_cueBox,
+          .align = FlexAlign::Center,
+          .gap = Style::spaceSm * scale,
+          .paddingV = Style::spaceMd * scale,
+          .visible = false,
+      },
+      ui::glyph({
+          .out = &m_cueGlyph,
+          .glyph = "fingerprint",
+          .glyphSize = scaled(kCueGlyphSize),
+          .color = colorSpecFromRole(ColorRole::Primary),
+      }),
+      ui::label({
+          .out = &m_cueTitle,
+          .fontSize = Style::fontSizeTitle * scale,
+          .fontWeight = FontWeight::Bold,
+          .color = colorSpecFromRole(ColorRole::OnSurface),
+          .maxLines = 2,
+          .textAlign = TextAlign::Center,
+      }),
+      ui::label({
+          .out = &m_cueDetail,
+          .fontSize = Style::fontSizeBody * scale,
+          .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
+          .maxLines = 3,
+          .textAlign = TextAlign::Center,
+      })
+  ));
+
   auto bottomContent = ui::column(
       {.align = FlexAlign::Stretch, .gap = Style::spaceSm * scale},
       ui::label({
@@ -179,6 +221,7 @@ void PolkitPanel::create() {
 
 void PolkitPanel::onOpen(std::string_view /*context*/) {
   m_lastResponseRequired = false;
+  m_lastCue = AuthCue::None;
   m_iconResolved = false;
   m_hasTrackedRequest = false;
   m_trackedRequestCookie.clear();
@@ -218,6 +261,11 @@ void PolkitPanel::onClose() {
   m_iconContainer = nullptr;
   m_icon = nullptr;
   m_fallbackIcon = nullptr;
+  m_cueBox = nullptr;
+  m_cueGlyph = nullptr;
+  m_cueTitle = nullptr;
+  m_cueDetail = nullptr;
+  m_lastCue = AuthCue::None;
 }
 
 void PolkitPanel::cancelAuth() {
@@ -272,7 +320,8 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
       || m_submitButton == nullptr
       || m_input == nullptr
       || m_icon == nullptr
-      || m_fallbackIcon == nullptr) {
+      || m_fallbackIcon == nullptr
+      || m_cueBox == nullptr) {
     return;
   }
   const PolkitRequest request = agent->pendingRequest();
@@ -296,7 +345,9 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
   m_promptLabel->setColor(
       isInvalidPassword ? colorSpecFromRole(ColorRole::Error) : colorSpecFromRole(ColorRole::OnSurface)
   );
-  m_promptLabel->setVisible(!promptText.empty());
+  const AuthCue cue = pendingCue(needsInput, supplementaryRaw);
+  updateCue(cue, supplementaryError, supplementaryRaw);
+  m_promptLabel->setVisible(!promptText.empty() && cue == AuthCue::None);
   m_supplementaryLabel->setText(supplementaryText);
   m_supplementaryLabel->setVisible(!supplementaryText.empty());
   m_supplementaryLabel->setColor(colorSpecFromRole(ColorRole::OnSurfaceVariant));
@@ -309,6 +360,7 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
     }
   }
   m_lastResponseRequired = needsInput;
+  m_lastCue = cue;
 
   if (request.iconName != m_lastIconName || !m_iconResolved) {
     m_lastIconName = request.iconName;
@@ -346,6 +398,24 @@ void PolkitPanel::resolveIcon(Renderer& renderer, const PolkitRequest& request) 
   m_icon->clear(renderer);
   m_icon->setVisible(false);
   m_fallbackIcon->setVisible(true);
+}
+
+void PolkitPanel::updateCue(AuthCue cue, bool isError, const std::string& rawMessage) {
+  m_cueBox->setVisible(cue != AuthCue::None);
+  if (cue == AuthCue::None) {
+    return;
+  }
+  const bool fingerprint = cue == AuthCue::Fingerprint;
+  m_cueGlyph->setGlyph(fingerprint ? "fingerprint" : "key");
+  m_cueGlyph->setColor(colorSpecFromRole(isError ? ColorRole::Error : ColorRole::Primary));
+  m_cueTitle->setText(i18n::tr(fingerprint ? "auth.polkit.fingerprint.title" : "auth.polkit.security-key.title"));
+  // A failed scan keeps the PAM message ("Failed to match fingerprint"), the
+  // rest get the translated instruction.
+  m_cueDetail->setText(
+      isError ? wrapLongRuns(rawMessage)
+              : i18n::tr(fingerprint ? "auth.polkit.fingerprint.detail" : "auth.polkit.security-key.detail")
+  );
+  m_cueDetail->setColor(colorSpecFromRole(isError ? ColorRole::Error : ColorRole::OnSurfaceVariant));
 }
 
 void PolkitPanel::submit(std::string_view response) {
