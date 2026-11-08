@@ -27,7 +27,8 @@ namespace {
   const sdbus::ObjectPath kLoginPath{"/org/freedesktop/login1"};
   constexpr auto kLoginManagerInterface = "org.freedesktop.login1.Manager";
 
-  constexpr int kMaxRetries = 3;
+  // Retries after the first scan: 3 attempts in all, like pam_fprintd max-tries=3.
+  constexpr int kMaxRetries = 2;
   constexpr auto kRetryDelay = std::chrono::milliseconds(250);
 
   enum class MatchResult {
