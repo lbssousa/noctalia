@@ -374,6 +374,7 @@ location = "https://example.invalid/bad"
     c.lockscreen = LockscreenConfig{
         .lockBeforeSuspend = false,
         .gracePeriodSeconds = 3,
+        .pamService = "noctalia",
         .blurredDesktop = true,
         .transitions = {LockscreenTransition::Disc, LockscreenTransition::Zoom},
         .transitionDurationMs = 900.0F,
