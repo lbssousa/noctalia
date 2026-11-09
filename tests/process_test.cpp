@@ -141,6 +141,34 @@ namespace {
     return ok;
   }
 
+  bool syncFeedsStdinData() {
+    process::RunOptions options;
+    options.stdinData = "1234\nsecond line\n";
+    const auto result = process::runSync({"/bin/sh", "-c", "read -r first; printf '%s' \"$first\""}, options);
+    bool ok = expect(result.exitCode == 0, "stdin data command failed");
+    ok = expect(result.out == "1234", "stdin data was not visible in child") && ok;
+
+    // A child that never reads its stdin must not break the run (nor raise SIGPIPE here).
+    options.stdinData = std::string(4096, 'x');
+    const auto ignored = process::runSync(std::vector<std::string>{"true"}, options);
+    ok = expect(ignored.exitCode == 0, "child ignoring stdin data failed") && ok;
+    return ok;
+  }
+
+  bool syncRunsInWorkingDir() {
+    process::RunOptions options;
+    options.workingDir = "/";
+    const auto result = process::runSync({"/bin/sh", "-c", "pwd"}, options);
+    bool ok = expect(result.exitCode == 0, "working dir command failed");
+    // Captured output loses its trailing newline.
+    ok = expect(result.out == "/", "child did not start in the working dir") && ok;
+
+    options.workingDir = "/nonexistent/noctalia-process-test";
+    const auto missing = process::runSync({"/bin/sh", "-c", "pwd"}, options);
+    ok = expect(missing.exitCode == 127, "missing working dir did not fail the run") && ok;
+    return ok;
+  }
+
   bool stringCommandsSupportShellComposition() {
     const auto result = process::runSync("printf first && printf second");
     bool ok = expect(result.exitCode == 0, "composed shell command failed");
@@ -249,6 +277,8 @@ int main() {
   ok = capturedAsyncDeliversCallbacksAndResult() && ok;
   ok = capturedAsyncDeliversCompletionOnly() && ok;
   ok = syncAppliesEnvOverrides() && ok;
+  ok = syncFeedsStdinData() && ok;
+  ok = syncRunsInWorkingDir() && ok;
   ok = stringCommandsSupportShellComposition() && ok;
   ok = detachedAsyncInheritsLaunchEnvironment() && ok;
   ok = detachedMissingBinaryReturnsFalse() && ok;
