@@ -450,6 +450,16 @@ namespace {
     void onClick() override { PanelManager::instance().togglePanel("clipboard"); }
   };
 
+  // Settings > Security: fingerprints, security keys, the OpenPGP card and resident SSH keys.
+  class SecurityShortcut final : public Shortcut {
+  public:
+    std::string_view id() const override { return "security"; }
+    std::string defaultLabel() const override { return i18n::tr("control-center.shortcuts.security"); }
+    std::string_view iconOn() const override { return "shield-lock"; }
+    std::string_view iconOff() const override { return "shield-lock"; }
+    void onClick() override { PanelManager::instance().openSettingsWindow("security"); }
+  };
+
   using ShortcutCreator = std::unique_ptr<Shortcut> (*)(const ShortcutServices& services);
   using ShortcutAvailability = bool (*)(const Config& config);
 
@@ -540,6 +550,10 @@ namespace {
           .type = "clipboard",
           .labelKey = "control-center.shortcuts.clipboard",
           .isAvailable = [](const Config& config) { return config.shell.clipboardEnabled; },
+      }),
+      builtinShortcut<SecurityShortcut>({
+          .type = "security",
+          .labelKey = "control-center.shortcuts.security",
       }),
   });
 
