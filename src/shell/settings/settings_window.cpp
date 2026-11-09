@@ -19,6 +19,8 @@
 #include "render/render_context.h"
 #include "render/text/font_weight_catalog.h"
 #include "scripting/plugin_registry.h"
+#include "security/fingerprint_manager.h"
+#include "security/security_key_manager.h"
 #include "shell/settings/settings_content_plugins.h"
 #include "shell/settings/settings_dialog_presenter.h"
 #include "shell/tooltip/tooltip_manager.h"
@@ -173,6 +175,8 @@ SettingsWindow::SettingsWindow() = default;
 SettingsWindow::~SettingsWindow() {
   setCalendarService(nullptr);
   destroyWindow();
+  // The managers outlive this window; drop the callbacks that point back at it.
+  setSecurityHardware(nullptr, nullptr);
 }
 
 void SettingsWindow::setCalendarService(CalendarService* service) {
@@ -424,6 +428,18 @@ void SettingsWindow::open(std::string context) {
     return;
   }
 
+  // Pick up readers and keys plugged in since the last time the page was shown.
+  if (m_fingerprints != nullptr && m_fingerprints->loaded()) {
+    m_fingerprints->refresh();
+  }
+  if (m_securityKeys != nullptr) {
+    if (m_securityKeys->loaded()) {
+      m_securityKeys->refresh();
+    }
+    // Notices a key plugged in or pulled out while the window is open.
+    m_securityKeys->startWatching();
+  }
+
   if (m_dependencies != nullptr) {
     m_dependencies->rescan();
   }
@@ -589,6 +605,7 @@ void SettingsWindow::dismissOpenSelectDropdown() {
 }
 
 void SettingsWindow::destroyWindow() {
+  stopSecurityHardware();
   m_modalHost.closeAll();
   m_configExportDialogModal.reset();
   m_editorSheetModal.reset();
