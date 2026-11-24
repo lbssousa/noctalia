@@ -1,7 +1,7 @@
 #pragma once
 
 #include "core/timer_manager.h"
-#include "core/process/process.h"
+#include "system/process.h"
 #include "security/security_hardware_parsers.h"
 
 #include <atomic>

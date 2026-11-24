@@ -1,4 +1,4 @@
-#include "wayland/clipboard_service.h"
+#include "shell/wayland/clipboard_service.h"
 #include "config/config_types.h"
 #include "core/deferred_call.h"
 #include "i18n/i18n.h"
@@ -8,7 +8,7 @@
 #include "shell/settings/settings_window.h"
 #include "ui/controls/flex.h"
 #include "ui/controls/input.h"
-#include "ui/dialogs/file_dialog.h"
+#include "shell/dialogs/file_dialog.h"
 
 #include <algorithm>
 #include <filesystem>
