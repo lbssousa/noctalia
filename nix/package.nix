@@ -41,6 +41,7 @@
   jemalloc,
   makeWrapper,
   git,
+  tzdata,
   gsettings-desktop-schemas,
   autoAddDriverRunpath,
   rev ? "unknown",
@@ -128,7 +129,21 @@ lib.warnIf cudaSupport
 
   mesonBuildType = "release";
 
-  mesonFlags = [ "-Dtests=disabled" ];
+  # nix-config (lbssousa/nix-config-noctalia): the lock screen authenticates
+  # against "noctalia-lock" (the "login" stack keeps password only) and the
+  # security key unlock runs "noctalia-lock-u2f" (pam_u2f); see
+  # modules/nixos/security/pam-policy.nix there. Unit tests run in checkPhase.
+  mesonFlags = [
+    "-Dtests=enabled"
+    "-Dpam_service=noctalia-lock"
+    "-Dpam_service_security_key=noctalia-lock-u2f"
+  ];
+
+  doCheck = stdenv.buildPlatform.canExecute stdenv.hostPlatform;
+  nativeCheckInputs = [
+    tzdata
+    git
+  ];
 
   ninjaFlags = [ "-v" ];
 
