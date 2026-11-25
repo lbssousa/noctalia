@@ -3146,6 +3146,10 @@
           "description": "Floating: where the polkit prompt sits on screen; Follow Bar keeps it near the bar. Attached: a position along the bar's edge aligns it to that end of the bar",
           "label": "Position"
         },
+        "modal-dim": {
+          "description": "Darkens every screen behind the polkit prompt and plugin panels marked modal (password, PIN, passphrase prompts). The fullscreen layer is named noctalia-panel-backdrop, so the compositor can also blur it. 0 disables it",
+          "label": "Modal backdrop dim"
+        },
         "position-session": {
           "description": "Floating: where the session panel sits on screen; Follow Bar keeps it near the bar. Attached: a position along the bar's edge aligns it to that end of the bar",
           "label": "Position"

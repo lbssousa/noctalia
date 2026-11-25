@@ -44,6 +44,7 @@ struct PluginPanelOptions {
   // One of scripting::kPanelKeyboardFocusModes.
   std::string keyboardFocus = "on_demand";
   bool persistent = false;
+  bool modal = false;
   // Key chord specs the panel takes over while focused, verbatim from the manifest.
   std::vector<std::string> captureKeys;
   scripting::PluginPanelShellConfig shellConfig;
@@ -74,6 +75,7 @@ public:
   bool fillsWidth() const noexcept override { return m_widthFill; }
   bool fillsHeight() const noexcept override { return m_heightFill; }
   bool dismissOnOutsideClick() const override { return m_dismissOnOutsideClick; }
+  bool isModal() const noexcept override { return m_modal; }
   LayerShellKeyboard keyboardMode() const override { return m_keyboardMode; }
   LayerShellLayer layer() const override { return m_layer; }
   std::string_view panelLayerToken() const override { return m_shellConfig.layer; }
@@ -156,6 +158,7 @@ private:
   bool m_heightContent = false;
   float m_maxContentHeight = 0.0F;
   bool m_dismissOnOutsideClick = true;
+  bool m_modal = false;
   LayerShellKeyboard m_keyboardMode = LayerShellKeyboard::OnDemand;
   LayerShellLayer m_layer = LayerShellLayer::Top;
   bool m_persistent = false;

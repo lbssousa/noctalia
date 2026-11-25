@@ -826,6 +826,58 @@ int main() {
   TEST_CHECK(!persistentExclusive.has_value());
   TEST_CHECK(error == R"(panel entry 'panel': persistent = true is incompatible with keyboard_focus = "exclusive")");
 
+  const auto modalPath = root / "modal/plugin.toml";
+  TEST_CHECK(writeManifest(
+      modalPath,
+      "id = \"me/modal\"\n"
+      "name = \"Modal\"\n"
+      "plugin_api = 8\n"
+      "[[panel]]\n"
+      "id = \"panel\"\n"
+      "entry = \"panel.luau\"\n"
+      "dismiss_on_outside_click = false\n"
+      "modal = true\n"
+  ));
+  error.clear();
+  const auto modal = scripting::parsePluginManifest(modalPath, &error);
+  TEST_CHECK(modal.has_value());
+  TEST_CHECK(modal->entries.size() == 1);
+  TEST_CHECK(modal->entries.front().panelModal);
+  // Not modal unless asked.
+  TEST_CHECK(!defaultKeyboard->entries.front().panelModal);
+
+  const auto modalTypePath = root / "modal-type/plugin.toml";
+  TEST_CHECK(writeManifest(
+      modalTypePath,
+      "id = \"me/modal-type\"\n"
+      "name = \"Modal Type\"\n"
+      "plugin_api = 8\n"
+      "[[panel]]\n"
+      "id = \"panel\"\n"
+      "entry = \"panel.luau\"\n"
+      "modal = \"yes\"\n"
+  ));
+  error.clear();
+  TEST_CHECK(!scripting::parsePluginManifest(modalTypePath, &error).has_value());
+  TEST_CHECK(error == "panel entry 'panel': modal must be a bool");
+
+  const auto modalPersistentPath = root / "modal-persistent/plugin.toml";
+  TEST_CHECK(writeManifest(
+      modalPersistentPath,
+      "id = \"me/modal-persistent\"\n"
+      "name = \"Modal Persistent\"\n"
+      "plugin_api = 11\n"
+      "[[panel]]\n"
+      "id = \"panel\"\n"
+      "entry = \"panel.luau\"\n"
+      "dismiss_on_outside_click = false\n"
+      "persistent = true\n"
+      "modal = true\n"
+  ));
+  error.clear();
+  TEST_CHECK(!scripting::parsePluginManifest(modalPersistentPath, &error).has_value());
+  TEST_CHECK(error == "panel entry 'panel': modal = true is not supported with persistent = true");
+
   const auto persistentAttachedPath = root / "persistent-attached/plugin.toml";
   TEST_CHECK(writeManifest(
       persistentAttachedPath,

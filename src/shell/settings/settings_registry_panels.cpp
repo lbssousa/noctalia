@@ -133,6 +133,12 @@ namespace settings::registry {
         "settings.schema.panels.position-polkit.description", cfg.shell.panel.polkitPosition
     ));
     entries.push_back(makeEntry(
+        SettingsSection::Panels, "polkit", tr("settings.schema.panels.modal-dim.label"),
+        tr("settings.schema.panels.modal-dim.description"), {"shell", "panel", "modal_dim"},
+        sliderFor(cfg.shell.panel.modalDim, noctalia::config::schema::kUnitRange, false),
+        "modal backdrop dim darken blur polkit password pinentry askpass"
+    ));
+    entries.push_back(makeEntry(
         SettingsSection::Panels, "wallpaper", tr("settings.schema.panels.wallpaper-show-names.label"),
         tr("settings.schema.panels.wallpaper-show-names.description"), {"shell", "panel", "wallpaper_show_names"},
         ToggleSetting{cfg.shell.panel.wallpaperShowNames}, "picker grid caption file name label thumbnail"

@@ -410,6 +410,7 @@ void PanelManager::initialize(CompositorPlatform& platform, ConfigService* confi
   m_config = config;
   m_renderContext = renderContext;
   m_clickShield.initialize(platform.wayland());
+  m_modalBackdrop.initialize(platform.wayland());
   m_persistentHost.initialize(platform, config, renderContext);
 }
 
@@ -967,6 +968,9 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   const PanelKeyboardPlan attachedKeyboardPlan =
       resolvePanelKeyboardPlan(m_activePanel->keyboardMode(), hasFocusGrab, hasFocusGrab && wantsOutsideDismiss, true);
 
+  // Before the panel surface exists, so the backdrop stacks below it.
+  syncModalBackdrop(panelLayer);
+
   if (wantsOutsideDismiss) {
     activateClickShield(panelLayer);
   }
@@ -1410,6 +1414,36 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   }
 }
 
+void PanelManager::syncModalBackdrop(LayerShellLayer layer) {
+  const float dim = m_config != nullptr ? m_config->config().shell.panel.modalDim : 0.0F;
+  if (m_activePanel == nullptr || m_platform == nullptr || !m_activePanel->isModal() || dim <= 0.0F) {
+    m_modalBackdrop.deactivate();
+    return;
+  }
+  std::vector<wl_output*> outputs;
+  outputs.reserve(m_platform->outputs().size());
+  for (const auto& wlOutput : m_platform->outputs()) {
+    if (wlOutput.output != nullptr) {
+      outputs.push_back(wlOutput.output);
+    }
+  }
+  m_modalBackdrop.activate(outputs, layer, dim);
+}
+
+void PanelManager::scheduleModalBackdropRelease() {
+  if (!m_modalBackdrop.isActive()) {
+    return;
+  }
+  // Deferred: a modal panel replacing this one (a chained prompt) opens right after
+  // destroyPanel() returns and keeps the same backdrop instead of flickering. If no
+  // modal panel is open by then (closed for good, or the reopen failed), drop it.
+  DeferredCall::callLater([this] {
+    if (!isOpen() || m_closing || m_activePanel == nullptr || !m_activePanel->isModal()) {
+      m_modalBackdrop.deactivate();
+    }
+  });
+}
+
 void PanelManager::activateClickShield(LayerShellLayer layer) {
   if (m_activePanel == nullptr || m_platform == nullptr) {
     return;
@@ -1750,6 +1784,12 @@ void PanelManager::destroyPanel() {
   }
   if (attachedOutput != nullptr && m_attachedPanelStateCallback) {
     m_attachedPanelStateCallback(attachedOutput, attachedBarName, false);
+  }
+  if (m_afterCaptureClose) {
+    // A capture follows right away: the backdrop must not be in it.
+    m_modalBackdrop.deactivate();
+  } else {
+    scheduleModalBackdropRelease();
   }
   if (m_panelClosedCallback) {
     m_panelClosedCallback();

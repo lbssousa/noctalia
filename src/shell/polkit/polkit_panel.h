@@ -40,6 +40,7 @@ public:
   LayerShellLayer layer() const override { return LayerShellLayer::Overlay; }
   LayerShellKeyboard keyboardMode() const override { return LayerShellKeyboard::Exclusive; }
   bool dismissOnOutsideClick() const override { return false; }
+  bool isModal() const noexcept override { return true; }
   InputArea* initialFocusArea() const override;
   bool handleGlobalKey(std::uint32_t sym, std::uint32_t modifiers, bool pressed, bool preedit) override;
 

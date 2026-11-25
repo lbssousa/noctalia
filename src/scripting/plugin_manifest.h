@@ -148,6 +148,9 @@ namespace scripting {
     // true: live outside PanelManager's single active-panel slot, so opening another
     // panel leaves this one on screen. Requires panelDismissOnOutsideClick = false.
     bool panelPersistent = false;
+    // `modal = true`: darken (and let the compositor blur) every output behind the
+    // panel while it is open. Incompatible with panelPersistent.
+    bool panelModal = false;
     // Key chord specs ("space", "ctrl+r") this panel takes over while it holds keyboard
     // focus. Each is validated as a chord at parse time. While focused, a matching press
     // or release is delivered to the script's onKey(chord, pressed) and not handled by

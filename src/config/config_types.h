@@ -1144,6 +1144,9 @@ struct ShellConfig {
     bool listItemBackground = false;       // filled rounded background behind launcher/clipboard list items
     bool wallpaperShowNames = true;        // caption wallpaper picker thumbnails with their file name
     std::string floatingLayer = "overlay"; // top | overlay; attached panels follow their bar
+    // Dim of the fullscreen "noctalia-panel-backdrop" layer behind modal panels (polkit,
+    // plugin panels with modal = true); 0 disables it. The compositor may also blur it.
+    float modalDim = 0.4F;
     PanelPlacement launcherPlacement = PanelPlacement::Floating;
     PanelPlacement clipboardPlacement = PanelPlacement::Floating;
     PanelPlacement controlCenterPlacement = PanelPlacement::Attached;

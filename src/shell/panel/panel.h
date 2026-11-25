@@ -114,6 +114,9 @@ public:
   virtual std::optional<float> detachedBackgroundOpacityOverride() const noexcept { return std::nullopt; }
   virtual bool wantsCloseAnimation() const noexcept { return true; }
   virtual bool dismissOnOutsideClick() const { return true; }
+  // Darken (and let the compositor blur) every output behind this panel while it
+  // is open: a "noctalia-panel-backdrop" layer, see PanelModalBackdrop.
+  virtual bool isModal() const noexcept { return false; }
   virtual bool ignorePointerEvent() const { return false; }
   // True to live in PersistentPanelHost instead of PanelManager's single active
   // slot: opening another panel leaves it on screen, and only an explicit toggle

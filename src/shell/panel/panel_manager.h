@@ -6,6 +6,7 @@
 #include "shell/dialogs/layer_popup_host.h"
 #include "shell/panel/attached_panel_context.h"
 #include "shell/panel/panel_click_shield.h"
+#include "shell/panel/panel_modal_backdrop.h"
 #include "shell/panel/persistent_panel_host.h"
 #include "wayland/popup_grab_host.h"
 
@@ -195,6 +196,8 @@ private:
   // for its first frame. The panel rect is excluded separately because
   // same-layer stacking order is compositor-defined.
   void activateClickShield(LayerShellLayer layer);
+  void syncModalBackdrop(LayerShellLayer layer);
+  void scheduleModalBackdropRelease();
   // Called AFTER the panel surface is mapped so the panel wl_surface is
   // available for the whitelist. No-op when focus-grab is unavailable.
   void activateFocusGrab();
@@ -244,6 +247,7 @@ private:
   std::function<void(wl_output*, std::string_view, bool)> m_attachedPanelStateCallback;
   std::function<bool(wl_output*, std::string_view)> m_attachedPanelBarSettledCallback;
   PanelClickShield m_clickShield;
+  PanelModalBackdrop m_modalBackdrop;
   PersistentPanelHost m_persistentHost;
   std::unique_ptr<FocusGrab> m_focusGrab;
   std::unordered_set<wl_surface*> m_focusGrabPopupSurfaces;
