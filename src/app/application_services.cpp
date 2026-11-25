@@ -62,6 +62,7 @@
 #include "shell/launcher/launcher_panel.h"
 #include "shell/panel/plugin_panel.h"
 #include "shell/polkit/polkit_panel.h"
+#include "shell/polkit/polkit_panel_action.h"
 #include "shell/session/session_ipc.h"
 #include "shell/session/session_panel.h"
 #include "shell/setup_wizard/setup_wizard_panel.h"
@@ -441,30 +442,40 @@ void Application::syncPolkitAgent() {
     if (m_polkitAgent == nullptr) {
       return;
     }
-    if (!m_polkitAgent->hasPendingRequest()) {
+    const bool hasPending = m_polkitAgent->hasPendingRequest();
+    if (hasPending) {
+      m_polkitIdleCloseTimer.stop();
+    }
+    const bool hasContent = m_polkitAgent->isResponseRequired() || !m_polkitAgent->supplementaryMessage().empty();
+    // A panel still playing its close animation counts as closed: a request that
+    // arrives then (run0 twice in a row, as nixos-rebuild does) gets a fresh panel
+    // instead of the closing one, whose onClose() would cancel it.
+    switch (polkit_panel::decideAction(
+        hasPending, hasContent, m_panelManager.isOpenPanel("polkit"), m_panelManager.isClosing()
+    )) {
+    case polkit_panel::Action::None:
+      return;
+    case polkit_panel::Action::ScheduleClose:
       // Defer close so a follow-up BeginAuthentication in the same burst
       // (pkexec → systemd-enable, etc.) can reuse the panel instead of racing
       // teardown.
-      if (m_panelManager.isOpenPanel("polkit")) {
-        m_polkitIdleCloseTimer.start(std::chrono::milliseconds(150), [this] {
-          if (m_polkitAgent != nullptr && !m_polkitAgent->hasPendingRequest() && m_panelManager.isOpenPanel("polkit")) {
-            m_panelManager.close();
-          }
-        });
-      }
+      m_polkitIdleCloseTimer.start(std::chrono::milliseconds(150), [this] {
+        if (m_polkitAgent != nullptr
+            && !m_polkitAgent->hasPendingRequest()
+            && m_panelManager.isOpenPanel("polkit")
+            && !m_panelManager.isClosing()) {
+          m_panelManager.close();
+        }
+      });
       return;
-    }
-    m_polkitIdleCloseTimer.stop();
-    // BeginAuthentication alone has no prompt yet; show-info and request both do.
-    const bool hasContent = m_polkitAgent->isResponseRequired() || !m_polkitAgent->supplementaryMessage().empty();
-    if (!hasContent && !m_panelManager.isOpenPanel("polkit")) {
-      return;
-    }
-    if (!m_panelManager.isOpenPanel("polkit")) {
+    case polkit_panel::Action::Open: {
       wl_output* output = m_compositorPlatform.preferredInteractiveOutput(std::chrono::milliseconds(1200));
       m_panelManager.openPanel("polkit", PanelOpenRequest{.output = output});
-    } else {
+      return;
+    }
+    case polkit_panel::Action::Refresh:
       m_panelManager.refresh();
+      return;
     }
   });
   m_polkitPollSource = std::make_unique<PolkitPollSource>(*m_polkitAgent);

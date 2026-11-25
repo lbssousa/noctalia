@@ -243,6 +243,7 @@ void PolkitPanel::create() {
 }
 
 void PolkitPanel::onOpen(std::string_view /*context*/) {
+  m_closing = false;
   m_lastResponseRequired = false;
   m_lastPinPrompt = false;
   m_lastCue = AuthCue::None;
@@ -270,6 +271,7 @@ void PolkitPanel::onClose() {
   }
   m_hasTrackedRequest = false;
   m_trackedRequestCookie.clear();
+  m_closing = false;
   m_lastResponseRequired = false;
   m_lastPinPrompt = false;
   clearReleasedRoot();
@@ -367,7 +369,7 @@ void PolkitPanel::doUpdate(Renderer& renderer) {
     return;
   }
   const PolkitRequest request = agent->pendingRequest();
-  if (agent->hasPendingRequest()) {
+  if (agent->hasPendingRequest() && !m_closing) {
     m_trackedRequestCookie = request.cookie;
     m_hasTrackedRequest = true;
   }

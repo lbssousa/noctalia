@@ -1354,6 +1354,7 @@ if build_tests
     'plugin_source_locks',
     'plugin_source_paths',
     'pixel_stream_client',
+    'polkit_panel_action',
     'scheme',
     'screenshot_region_badge',
     'screenshot_ipc_request',

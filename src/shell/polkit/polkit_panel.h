@@ -29,6 +29,7 @@ public:
   void create() override;
   void onOpen(std::string_view context) override;
   void onClose() override;
+  void onCloseStarted() override { m_closing = true; }
 
   float preferredWidth() const override { return scaled(480.0F); }
   // Fits its content (the prompt grows when a password is needed); this is the maximum.
@@ -83,4 +84,6 @@ private:
   auth_text::AuthCue m_lastCue = auth_text::AuthCue::None;
   std::string m_trackedRequestCookie;
   bool m_hasTrackedRequest = false;
+  // Closing: a newer request must not be adopted, or onClose() would cancel it.
+  bool m_closing = false;
 };
