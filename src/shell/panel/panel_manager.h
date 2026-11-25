@@ -121,6 +121,8 @@ public:
 
   bool isOpen() const noexcept;
   bool isOpenPanel(std::string_view panelId) const noexcept;
+  // The active panel is playing its close animation (isOpenPanel() is still true).
+  bool isClosing() const noexcept { return m_closing; }
   bool isPanelTransitionActive() const noexcept;
   bool isAttachedOpen() const noexcept;
   // Output the active panel is on; null when none is open.

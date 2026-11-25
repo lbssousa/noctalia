@@ -1564,6 +1564,9 @@ void PanelManager::closePanel(bool animateClose) {
   m_inputDispatcher.setSceneRoot(nullptr);
   m_closing = true;
   m_attachedOpenAnimationPending = false;
+  if (m_activePanel != nullptr) {
+    m_activePanel->onCloseStarted();
+  }
 
   if (animateClose && m_sceneRoot != nullptr && m_activePanel != nullptr && m_activePanel->wantsCloseAnimation()) {
     const std::uint64_t gen = ++m_destroyGeneration;
@@ -1615,6 +1618,9 @@ void PanelManager::closePanelForCapture(std::function<void()> afterClose) {
   m_afterCaptureClose = std::move(afterClose);
   m_closing = true;
   m_attachedOpenAnimationPending = false;
+  if (m_activePanel != nullptr) {
+    m_activePanel->onCloseStarted();
+  }
   const std::uint64_t generation = ++m_destroyGeneration;
   deactivateOutsideClickHandlers();
   m_inputDispatcher.setSceneRoot(nullptr);

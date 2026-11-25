@@ -35,6 +35,9 @@ public:
   }
   virtual void onOpen(std::string_view context) { (void)context; }
   virtual void onClose() {}
+  // The close animation started: onClose() follows once it finishes (or the
+  // panel is replaced). The panel is on its way out and must not adopt new state.
+  virtual void onCloseStarted() {}
   virtual void onIconThemeChanged() {}
   virtual void scrollFocusedInputIntoView(InputArea* area) { (void)area; }
   virtual bool isContextActive(std::string_view context) const {
