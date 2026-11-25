@@ -208,11 +208,18 @@ bool FingerprintManager::ensureDeviceProxy() {
   m_device->uponSignal("VerifyStatus").onInterface(kDeviceInterface).call([this](const std::string& result, bool done) {
     handleVerifyStatus(result, done);
   });
-  m_device->uponSignal("VerifyFingerSelected").onInterface(kDeviceInterface).call([this](const std::string& finger) {
+  // VerifyFingerSelected names the finger only when fprintd verifies a single one; with several
+  // prints on a reader that identifies it says "any". VerifyMatchedFinger, from an fprintd that
+  // emits it (lbssousa/fprintd, branch verify-matched-finger), comes right before verify-match and
+  // names the finger that matched. Stock fprintd never emits it, and the test then says just that
+  // a print was recognized.
+  const auto rememberFinger = [this](const std::string& finger) {
     if (m_mode == Mode::Verifying) {
       m_matchedFinger = finger;
     }
-  });
+  };
+  m_device->uponSignal("VerifyFingerSelected").onInterface(kDeviceInterface).call(rememberFinger);
+  m_device->uponSignal("VerifyMatchedFinger").onInterface(kDeviceInterface).call(rememberFinger);
   return true;
 }
 
