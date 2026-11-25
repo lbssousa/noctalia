@@ -675,6 +675,7 @@ _noctalia_sources = files(
   'src/shell/screen_corners/screen_corner.cpp',
   'src/shell/screen_corners/screen_corners.cpp',
   'src/shell/panel/panel_click_shield.cpp',
+  'src/shell/panel/panel_modal_backdrop.cpp',
   'src/shell/wayland/hyprland/focus_grab_service.cpp',
   'src/shell/panel/panel_manager.cpp',
   'src/shell/panel/persistent_panel_host.cpp',

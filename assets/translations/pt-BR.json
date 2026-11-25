@@ -3141,6 +3141,10 @@
           "description": "Fluturante: onde a Caixa de Diálogo polkit fica na tela; Seguir Barra mantém-no perto da barra. Anexado: uma posição ao longo da extremidade da barra alinha-a ao fim da barra",
           "label": "Posição"
         },
+        "modal-dim": {
+          "description": "Escurece todas as telas atrás do diálogo do polkit e dos painéis de plugins marcados como modais (senha, PIN, frase secreta). A camada em tela cheia se chama noctalia-panel-backdrop, então o compositor também pode desfocá-la. 0 desliga",
+          "label": "Escurecimento do fundo modal"
+        },
         "position-session": {
           "description": "Fluturante: onde o Painel de Sessão fica na tela; Seguir Barra mantém-no perto da barra. Anexado: uma posição ao longo da extremidade da barra alinha-o ao fim da barra",
           "label": "Posição"

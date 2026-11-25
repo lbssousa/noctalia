@@ -118,6 +118,7 @@ namespace noctalia::config::schema {
                 tbl.insert_or_assign("floating_layer", in.floatingLayer);
               }
           ),
+          field(&ShellConfig::PanelConfig::modalDim, "modal_dim", kUnitRange),
           enumField(&ShellConfig::PanelConfig::launcherPlacement, "launcher_placement", kPanelPlacements),
           enumField(&ShellConfig::PanelConfig::clipboardPlacement, "clipboard_placement", kPanelPlacements),
           enumField(&ShellConfig::PanelConfig::controlCenterPlacement, "control_center_placement", kPanelPlacements),

@@ -607,6 +607,20 @@ namespace scripting {
             }
             entry.panelPersistent = persistent->get();
           }
+          if ((*entryTable)["modal"]) {
+            // No plugin_api gate: older shells ignore the key, so a plugin can set it
+            // without raising its minimum.
+            const auto* modal = (*entryTable)["modal"].as_boolean();
+            if (modal == nullptr) {
+              error = "panel entry '" + entry.id + "': modal must be a bool";
+              return false;
+            }
+            entry.panelModal = modal->get();
+          }
+          if (entry.panelPersistent && entry.panelModal) {
+            error = "panel entry '" + entry.id + "': modal = true is not supported with persistent = true";
+            return false;
+          }
           if (entry.panelPersistent && entry.panelHeightContent) {
             error = "panel entry '" + entry.id + R"(': height = "content" is not supported with persistent = true)";
             return false;
