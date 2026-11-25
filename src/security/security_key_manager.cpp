@@ -1027,7 +1027,7 @@ void SecurityKeyManager::linkCard(std::string message) {
   // gpg at it.
   const bool started = run(
       {"gpg", "--card-status"},
-      [this, message = std::move(message)](const process::RunResult&) {
+      [this, message](const process::RunResult&) {
         succeed(Area::Gpg, message);
         loadCard([this]() { finishOp(); });
       },
