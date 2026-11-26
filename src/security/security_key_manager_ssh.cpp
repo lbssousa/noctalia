@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 #include "i18n/i18n.h"
+#include "security/private_files.h"
 #include "security/security_key_manager.h"
 
 #include <algorithm>
@@ -57,77 +58,6 @@ cat "$pin" && rm -f "$pin"
     return std::filesystem::temp_directory_path().string();
   }
 
-  // Writes a new file with <mode>; never through or over an existing path.
-  bool writeNewFile(const std::filesystem::path& path, std::string_view data, mode_t mode) {
-    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode);
-    if (fd < 0) {
-      return false;
-    }
-    bool ok = ::fchmod(fd, mode) == 0;
-    std::size_t written = 0;
-    while (ok && written < data.size()) {
-      const ssize_t n = ::write(fd, data.data() + written, data.size() - written);
-      if (n < 0 && errno == EINTR) {
-        continue;
-      }
-      ok = n > 0;
-      written += n > 0 ? static_cast<std::size_t>(n) : 0;
-    }
-    ok = ::close(fd) == 0 && ok;
-    return ok;
-  }
-
-  // Writes <path> whole, or not at all.
-  bool replaceFile(const std::filesystem::path& path, std::string_view text, mode_t mode) {
-    std::string tmpl = (path.parent_path() / ("." + path.filename().string() + "-XXXXXX")).string();
-    const int fd = ::mkstemp(tmpl.data());
-    if (fd < 0) {
-      return false;
-    }
-    bool ok = ::fchmod(fd, mode) == 0;
-    std::size_t written = 0;
-    while (ok && written < text.size()) {
-      const ssize_t n = ::write(fd, text.data() + written, text.size() - written);
-      if (n < 0 && errno == EINTR) {
-        continue;
-      }
-      ok = n > 0;
-      written += n > 0 ? static_cast<std::size_t>(n) : 0;
-    }
-    ok = ok && ::fsync(fd) == 0;
-    ok = ::close(fd) == 0 && ok;
-    std::error_code ec;
-    if (ok) {
-      std::filesystem::rename(tmpl, path, ec);
-      ok = !ec;
-    }
-    if (!ok) {
-      std::filesystem::remove(tmpl, ec);
-    }
-    return ok;
-  }
-
-  std::optional<std::string> readFile(const std::filesystem::path& path) {
-    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-      return std::nullopt;
-    }
-    std::string data;
-    std::array<char, 4096> buffer{};
-    while (data.size() <= kSshFileLimit) {
-      const ssize_t n = ::read(fd, buffer.data(), buffer.size());
-      if (n < 0 && errno == EINTR) {
-        continue;
-      }
-      if (n <= 0) {
-        break;
-      }
-      data.append(buffer.data(), static_cast<std::size_t>(n));
-    }
-    ::close(fd);
-    return data;
-  }
-
   bool isDirectoryNotLink(const std::filesystem::path& path) {
     std::error_code ec;
     return std::filesystem::is_directory(std::filesystem::symlink_status(path, ec));
@@ -158,25 +88,8 @@ std::filesystem::path SecurityKeyManager::sshDir() const {
 std::optional<std::string> SecurityKeyManager::readSsh(const std::filesystem::path& relative, bool follow) const {
   // Never through a symbolic link unless <follow> (~/.ssh/config, which home-manager links to the
   // Nix store). Small ASCII files only.
-  const auto path = sshDir() / relative;
-  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | (follow ? 0 : O_NOFOLLOW));
-  if (fd < 0) {
-    return std::nullopt;
-  }
-  std::string data;
-  std::array<char, 4096> buffer{};
-  while (data.size() <= kSshFileLimit) {
-    const ssize_t n = ::read(fd, buffer.data(), buffer.size());
-    if (n < 0 && errno == EINTR) {
-      continue;
-    }
-    if (n <= 0) {
-      break;
-    }
-    data.append(buffer.data(), static_cast<std::size_t>(n));
-  }
-  ::close(fd);
-  if (data.size() > kSshFileLimit || !std::ranges::all_of(data, [](char c) { return static_cast<unsigned char>(c) < 0x80; })) {
+  auto data = security_hw::files::readLimited(sshDir() / relative, follow, kSshFileLimit);
+  if (data.has_value() && !std::ranges::all_of(*data, [](char c) { return static_cast<unsigned char>(c) < 0x80; })) {
     return std::nullopt;
   }
   return data;
@@ -227,14 +140,13 @@ void SecurityKeyManager::loadSsh() {
 
   for (const auto& name : names) {
     SshKey key{.name = name};
-    if (const auto pub = sshPublic(name)) {
+    const auto pubText = readSsh(name + ".pub", false);
+    if (const auto pub = pubText ? security_hw::parseSkPublic(*pubText) : std::nullopt) {
       key.application = pub->application;
       key.type = pub->type;
       key.user = security_hw::residentKeyUser(name, pub->type, pub->application);
       key.fingerprint = security_hw::sshFingerprint(pub->blob);
-      if (const auto text = readSsh(name + ".pub", false)) {
-        key.publicKey = lastLine(*text);
-      }
+      key.publicKey = lastLine(*pubText);
       if (const auto remote = security_hw::gitRemote(pub->application)) {
         key.host = remote->host;
         const auto found = dropIn(remote->host);
@@ -335,7 +247,8 @@ SecurityKeyManager::HostPlan SecurityKeyManager::planHost(
     names.push_back(name);
   }
   const std::string text = security_hw::dropInText(names, remote, wanted);
-  if (found.kind == security_hw::DropInKind::Ours && listed
+  if (found.kind == security_hw::DropInKind::Ours
+      && listed
       && text == security_hw::dropInText(found.names, found.remote, found.minutes)) {
     return {};
   }
@@ -351,7 +264,7 @@ SecurityKeyManager::HostPlan SecurityKeyManager::hostChangeFor(const std::string
   return planHost(name, *remote, enable, std::nullopt);
 }
 
-std::string SecurityKeyManager::applyHost(const std::optional<HostChange>& change, std::string& detail) {
+std::string_view SecurityKeyManager::applyHost(const std::optional<HostChange>& change, std::string& detail) {
   if (!change.has_value()) {
     return {};
   }
@@ -369,7 +282,7 @@ std::string SecurityKeyManager::applyHost(const std::optional<HostChange>& chang
     detail = "~/.ssh/config.d";
     return "ssh-config-foreign";
   }
-  if (change->text->find("    ControlMaster auto\n") != std::string::npos) {
+  if (change->text->contains("    ControlMaster auto\n")) {
     // The master connections' sockets: private, as ssh requires.
     auto control = sshDir();
     for (const auto& part : std::filesystem::path(security_hw::kControlDir)) {
@@ -381,14 +294,14 @@ std::string SecurityKeyManager::applyHost(const std::optional<HostChange>& chang
     }
     ::chmod(control.c_str(), 0700);
   }
-  if (!replaceFile(change->path, *change->text, 0600)) {
+  if (!security_hw::files::replaceFile(change->path, *change->text, 0600)) {
     detail = change->path.string();
     return "write-failed";
   }
   return {};
 }
 
-std::string SecurityKeyManager::ensureInclude(std::string& detail) {
+std::string_view SecurityKeyManager::ensureInclude(std::string& detail) {
   // "Include config.d/*.conf" at the top of ~/.ssh/config, where it applies to every host, unless
   // the file includes config.d already. A symbolic link (home-manager's) is never written to.
   const auto path = sshDir() / "config";
@@ -411,7 +324,9 @@ std::string SecurityKeyManager::ensureInclude(std::string& detail) {
     mode = st.st_mode & 0777;
   }
   if (!ensurePrivateDir(sshDir())
-      || !replaceFile(path, std::string(security_hw::kSshInclude) + "\n" + (text->empty() ? "" : "\n" + *text), mode)) {
+      || !security_hw::files::replaceFile(
+          path, std::string(security_hw::kSshInclude) + "\n" + (text->empty() ? "" : "\n" + *text), mode
+      )) {
     detail = path.string();
     return "write-failed";
   }
@@ -447,10 +362,10 @@ void SecurityKeyManager::installPairs(
       skipped.push_back(name);
       continue;
     }
-    const auto key = readFile(workdir / pair[0]);
-    const auto pub = readFile(workdir / pair[1]);
-    bool ok = key.has_value() && pub.has_value() && writeNewFile(dir / pair[0], *key, 0600);
-    if (ok && !writeNewFile(dir / pair[1], *pub, 0644)) {
+    const auto key = security_hw::files::readLimited(workdir / pair[0], false, kSshFileLimit);
+    const auto pub = security_hw::files::readLimited(workdir / pair[1], false, kSshFileLimit);
+    bool ok = key.has_value() && pub.has_value() && security_hw::files::writeNewFile(dir / pair[0], *key, 0600);
+    if (ok && !security_hw::files::writeNewFile(dir / pair[1], *pub, 0644)) {
       std::filesystem::remove(dir / pair[0], ec);
       ok = false;
     }
@@ -468,12 +383,12 @@ std::optional<std::filesystem::path> SecurityKeyManager::makeWorkdir(const std::
   if (::mkdtemp(tmpl.data()) == nullptr) {
     return std::nullopt;
   }
-  const std::filesystem::path dir(tmpl);
+  std::filesystem::path dir(tmpl);
   m_workdir = dir;
-  if (!writeNewFile(dir / "askpass", kAskpassScript, 0700)) {
+  if (!security_hw::files::writeNewFile(dir / "askpass", kAskpassScript, 0700)) {
     return std::nullopt;
   }
-  if (!pin.empty() && !writeNewFile(dir / "pin", pin + "\n", 0600)) {
+  if (!pin.empty() && !security_hw::files::writeNewFile(dir / "pin", pin + "\n", 0600)) {
     return std::nullopt;
   }
   return dir;
@@ -518,60 +433,59 @@ void SecurityKeyManager::runSshImport(const std::string& pin) {
     return;
   }
   setStage("touch");
-  const bool started = run(
-      {"ssh-keygen", "-K", "-N", ""},
-      [this, workdir = *workdir, pinGiven = !pin.empty()](const process::RunResult& result) {
-        if (cancelled()) {
-          finishOp();
-          return;
-        }
-        std::vector<std::string> found;
-        std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(workdir, ec)) {
-          const std::string name = entry.path().filename().string();
-          if (security_hw::isResidentKeyName(name)) {
-            found.push_back(name);
-          }
-        }
-        std::ranges::sort(found);
-        if (!result && found.empty()) {
-          const std::string code = result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, pinGiven);
-          if (!reaskPin(Op::SshImport, code)) {
-            fail(Area::Ssh, code, lastLine(result.err));
-          }
-          finishOp();
-          // The key may have been pulled out, or its PIN retries changed.
-          refresh();
-          return;
-        }
-        std::vector<std::string> imported;
-        std::vector<std::string> skipped;
-        installPairs(workdir, found, imported, skipped);
-        if (imported.empty() && skipped.empty()) {
-          fail(Area::Ssh, "ssh-none");
-        } else {
-          const auto list = [](const std::vector<std::string>& names) {
-            std::string out;
-            for (const auto& name : names) {
-              out += (out.empty() ? "~/.ssh/" : ", ~/.ssh/") + name;
+  const bool started =
+      run({"ssh-keygen", "-K", "-N", ""},
+          [this, workdir = *workdir, pinGiven = !pin.empty()](const process::RunResult& result) {
+            if (cancelled()) {
+              finishOp();
+              return;
             }
-            return out;
-          };
-          std::string message;
-          if (!imported.empty()) {
-            message = i18n::tr("settings.security-keys.ssh.imported", "names", list(imported));
-          }
-          if (!skipped.empty()) {
-            message += (message.empty() ? "" : "\n")
-                + i18n::tr("settings.security-keys.ssh.skipped", "names", list(skipped));
-          }
-          succeed(Area::Ssh, std::move(message));
-        }
-        loadSsh();
-        finishOp();
-      },
-      {.timeoutSeconds = kTouchTimeoutSeconds, .env = askpassEnv(), .workingDir = workdir->string()}
-  );
+            std::vector<std::string> found;
+            std::error_code ec;
+            for (const auto& entry : std::filesystem::directory_iterator(workdir, ec)) {
+              const std::string name = entry.path().filename().string();
+              if (security_hw::isResidentKeyName(name)) {
+                found.push_back(name);
+              }
+            }
+            std::ranges::sort(found);
+            if (!result && found.empty()) {
+              const std::string code = result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, pinGiven);
+              if (!reaskPin(Op::SshImport, code)) {
+                fail(Area::Ssh, code, lastLine(result.err));
+              }
+              finishOp();
+              // The key may have been pulled out, or its PIN retries changed.
+              refresh();
+              return;
+            }
+            std::vector<std::string> imported;
+            std::vector<std::string> skipped;
+            installPairs(workdir, found, imported, skipped);
+            if (imported.empty() && skipped.empty()) {
+              fail(Area::Ssh, "ssh-none");
+            } else {
+              const auto list = [](const std::vector<std::string>& names) {
+                std::string out;
+                for (const auto& name : names) {
+                  out += (out.empty() ? "~/.ssh/" : ", ~/.ssh/") + name;
+                }
+                return out;
+              };
+              std::string message;
+              if (!imported.empty()) {
+                message = i18n::tr("settings.security-keys.ssh.imported", "names", list(imported));
+              }
+              if (!skipped.empty()) {
+                message += (message.empty() ? "" : "\n")
+                    + i18n::tr("settings.security-keys.ssh.skipped", "names", list(skipped));
+              }
+              succeed(Area::Ssh, std::move(message));
+            }
+            loadSsh();
+            finishOp();
+          },
+          {.timeoutSeconds = kTouchTimeoutSeconds, .env = askpassEnv(), .workingDir = workdir->string()});
   if (!started) {
     fail(Area::Ssh, "start-failed", "ssh-keygen");
     finishOp();
@@ -623,59 +537,58 @@ void SecurityKeyManager::runSshCreate(const std::string& pin) {
     return;
   }
   setStage("touch");
-  const bool started = run(
-      security_hw::sshCreateCommand((*workdir / name).string(), options),
-      [this, workdir = *workdir, name, options, pinGiven = !pin.empty()](const process::RunResult& result) {
-        if (cancelled()) {
-          finishOp();
-          return;
-        }
-        std::error_code madeEc;
-        const bool made = std::filesystem::exists(workdir / name, madeEc)
-            && std::filesystem::exists(workdir / (name + ".pub"), madeEc);
-        if (!result || !made) {
-          if ((result.out + result.err).find("Overwrite key in token") != std::string::npos) {
-            m_sshReplace = options;
-            fail(Area::Ssh, "ssh-exists", "ssh:" + options.application);
+  const bool started =
+      run(security_hw::sshCreateCommand((*workdir / name).string(), options),
+          [this, workdir = *workdir, name, options, pinGiven = !pin.empty()](const process::RunResult& result) {
+            if (cancelled()) {
+              finishOp();
+              return;
+            }
+            std::error_code madeEc;
+            const bool made = std::filesystem::exists(workdir / name, madeEc)
+                && std::filesystem::exists(workdir / (name + ".pub"), madeEc);
+            if (!result || !made) {
+              if ((result.out + result.err).contains("Overwrite key in token")) {
+                m_sshReplace = options;
+                fail(Area::Ssh, "ssh-exists", "ssh:" + options.application);
+                finishOp();
+                return;
+              }
+              const std::string code = result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, pinGiven);
+              if (!reaskPin(Op::SshCreate, code)) {
+                fail(Area::Ssh, code, lastLine(result.err));
+              }
+              finishOp();
+              refresh();
+              return;
+            }
+            std::vector<std::string> imported;
+            std::vector<std::string> skipped;
+            installPairs(workdir, {name}, imported, skipped);
+            if (imported.empty()) {
+              fail(Area::Ssh, "ssh-file-exists", "~/.ssh/" + name);
+              finishOp();
+              return;
+            }
+            m_pendingCreate.reset();
+            const auto pub = sshPublic(name);
+            const auto remote = pub ? security_hw::gitRemote(pub->application) : std::nullopt;
+            const auto text = readSsh(name + ".pub", false);
+            m_sshCreated = SshCreated{
+                .name = name,
+                .publicKey = text ? lastLine(*text) : std::string{},
+                .host = remote ? remote->host : std::string{},
+            };
+            loadSsh();
             finishOp();
-            return;
-          }
-          const std::string code = result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, pinGiven);
-          if (!reaskPin(Op::SshCreate, code)) {
-            fail(Area::Ssh, code, lastLine(result.err));
-          }
-          finishOp();
-          refresh();
-          return;
-        }
-        std::vector<std::string> imported;
-        std::vector<std::string> skipped;
-        installPairs(workdir, {name}, imported, skipped);
-        if (imported.empty()) {
-          fail(Area::Ssh, "ssh-file-exists", "~/.ssh/" + name);
-          finishOp();
-          return;
-        }
-        m_pendingCreate.reset();
-        const auto pub = sshPublic(name);
-        const auto remote = pub ? security_hw::gitRemote(pub->application) : std::nullopt;
-        const auto text = readSsh(name + ".pub", false);
-        m_sshCreated = SshCreated{
-            .name = name,
-            .publicKey = text ? lastLine(*text) : std::string{},
-            .host = remote ? remote->host : std::string{},
-        };
-        loadSsh();
-        finishOp();
-      },
-      {
-          // ssh-keygen asks on stdin before replacing a key on the security key.
-          .stdinData = options.replace ? "y\n" : "n\n",
-          .timeoutSeconds = kCreateTimeoutSeconds,
-          .env = askpassEnv(),
-          .workingDir = workdir->string(),
-      }
-  );
+          },
+          {
+              // ssh-keygen asks on stdin before replacing a key on the security key.
+              .stdinData = options.replace ? "y\n" : "n\n",
+              .timeoutSeconds = kCreateTimeoutSeconds,
+              .env = askpassEnv(),
+              .workingDir = workdir->string(),
+          });
   if (!started) {
     fail(Area::Ssh, "start-failed", "ssh-keygen");
     finishOp();
@@ -759,70 +672,68 @@ void SecurityKeyManager::runSshDelete(const std::string& pin) {
   const std::string devicePath = device()->path;
   setStage("touch");
   // Without a terminal fido2-token reads the PIN from stdin, once per run.
-  const bool started = run(
-      {"fido2-token", "-L", "-k", pub->application, devicePath},
-      [this, name, pin, devicePath, credential = handle->credential, change = plan.change](
-          const process::RunResult& listing
-      ) {
-        if (cancelled()) {
-          finishOp();
-          return;
-        }
-        if (!listing && listing.err.find("NO_CREDENTIALS") == std::string::npos) {
-          const std::string code = listing.timedOut ? "timeout" : security_hw::fidoErrorCode(listing.err, true);
-          if (!reaskPin(Op::SshDelete, code)) {
-            fail(Area::Ssh, code, lastLine(listing.err));
-          }
-          finishOp();
-          refresh();
-          return;
-        }
-        std::vector<security_hw::TokenCredential> matches;
-        for (auto& c : security_hw::parseTokenCredentials(listing.out)) {
-          if (c.raw == credential) {
-            matches.push_back(std::move(c));
-          }
-        }
-        if (matches.size() != 1) {
-          fail(Area::Ssh, "ssh-not-on-key", "~/.ssh/" + name);
-          finishOp();
-          return;
-        }
-        const bool deleting = run(
-            {"fido2-token", "-D", "-i", matches.front().id, devicePath},
-            [this, name, change](const process::RunResult& result) {
-              if (cancelled()) {
-                finishOp();
-                return;
-              }
-              if (!result) {
-                const std::string code = result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, true);
-                if (!reaskPin(Op::SshDelete, code)) {
-                  fail(Area::Ssh, code, lastLine(result.err));
-                }
-                finishOp();
-                refresh();
-                return;
-              }
-              // The key is gone from the security key: its copy no longer works.
-              unlinkPair(name);
-              std::string detail;
-              if (const auto code = applyHost(change, detail); !code.empty()) {
-                kLog.warn("cleaning up after deleting {} failed: {}", name, detail);
-              }
-              succeed(Area::Ssh, i18n::tr("settings.security-keys.ssh.deleted", "name", "~/.ssh/" + name));
-              loadSsh();
+  const bool started =
+      run({"fido2-token", "-L", "-k", pub->application, devicePath},
+          [this, name, pin, devicePath, credential = handle->credential,
+           change = plan.change](const process::RunResult& listing) {
+            if (cancelled()) {
               finishOp();
-            },
-            {.stdinData = pin + "\n", .timeoutSeconds = kAuthTimeoutSeconds}
-        );
-        if (!deleting) {
-          fail(Area::Ssh, "start-failed", "fido2-token");
-          finishOp();
-        }
-      },
-      {.stdinData = pin + "\n", .timeoutSeconds = kAuthTimeoutSeconds}
-  );
+              return;
+            }
+            if (!listing && !listing.err.contains("NO_CREDENTIALS")) {
+              const std::string code = listing.timedOut ? "timeout" : security_hw::fidoErrorCode(listing.err, true);
+              if (!reaskPin(Op::SshDelete, code)) {
+                fail(Area::Ssh, code, lastLine(listing.err));
+              }
+              finishOp();
+              refresh();
+              return;
+            }
+            std::vector<security_hw::TokenCredential> matches;
+            for (auto& c : security_hw::parseTokenCredentials(listing.out)) {
+              if (c.raw == credential) {
+                matches.push_back(std::move(c));
+              }
+            }
+            if (matches.size() != 1) {
+              fail(Area::Ssh, "ssh-not-on-key", "~/.ssh/" + name);
+              finishOp();
+              return;
+            }
+            const bool deleting =
+                run({"fido2-token", "-D", "-i", matches.front().id, devicePath},
+                    [this, name, change](const process::RunResult& result) {
+                      if (cancelled()) {
+                        finishOp();
+                        return;
+                      }
+                      if (!result) {
+                        const std::string code =
+                            result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, true);
+                        if (!reaskPin(Op::SshDelete, code)) {
+                          fail(Area::Ssh, code, lastLine(result.err));
+                        }
+                        finishOp();
+                        refresh();
+                        return;
+                      }
+                      // The key is gone from the security key: its copy no longer works.
+                      unlinkPair(name);
+                      std::string detail;
+                      if (const auto code = applyHost(change, detail); !code.empty()) {
+                        kLog.warn("cleaning up after deleting {} failed: {}", name, detail);
+                      }
+                      succeed(Area::Ssh, i18n::tr("settings.security-keys.ssh.deleted", "name", "~/.ssh/" + name));
+                      loadSsh();
+                      finishOp();
+                    },
+                    {.stdinData = pin + "\n", .timeoutSeconds = kAuthTimeoutSeconds});
+            if (!deleting) {
+              fail(Area::Ssh, "start-failed", "fido2-token");
+              finishOp();
+            }
+          },
+          {.stdinData = pin + "\n", .timeoutSeconds = kAuthTimeoutSeconds});
   if (!started) {
     fail(Area::Ssh, "start-failed", "fido2-token");
     finishOp();

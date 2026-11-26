@@ -589,6 +589,7 @@ _noctalia_sources = files(
   'src/scripting/plugin_bindings.cpp',
   'src/security/encrypted_file_store.cpp',
   'src/security/fingerprint_manager.cpp',
+  'src/security/private_files.cpp',
   'src/security/secret_store.cpp',
   'src/security/security_hardware_parsers.cpp',
   'src/security/security_key_manager.cpp',

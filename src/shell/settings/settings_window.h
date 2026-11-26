@@ -228,6 +228,8 @@ private:
   void openPluginSourceCreateEditor(std::optional<PluginSourceConfig> existing = std::nullopt);
   void openPluginSettingsEditor(std::string pluginId);
   void openPluginStore();
+  // Which sheet the shared editor sheet shows for the Security page, if any.
+  enum class SecuritySheet : std::uint8_t { None, Pin, SshCreate, Fingerprint };
   void insertSecurityHardwareEntries(const Config& cfg);
   void openFingerprintEnrollSheet();
   void openSshCreateSheet();
@@ -236,6 +238,9 @@ private:
   // operation is over.
   void syncSecurityKeyPinSheet();
   void openSecurityKeyPinSheet();
+  // Readies the shared editor sheet for <sheet>, closing whatever it shows; returns the close action.
+  std::function<void()> prepareSecuritySheet(SecuritySheet sheet);
+  void wipeSecurityKeyPin();
   void browseGpgPublicKey();
   void stopSecurityHardware();
   [[nodiscard]] settings::SecurityHardwareActions securityHardwareActions(const Config& cfg);
@@ -425,8 +430,6 @@ private:
   std::string m_securityKeyPin;
   Input* m_securityPinInput = nullptr;
   settings::SshCreateForm m_sshCreateForm;
-  // Which sheet the shared editor sheet shows for the security keys, if any.
-  enum class SecuritySheet : std::uint8_t { None, Pin, SshCreate };
   SecuritySheet m_securitySheet = SecuritySheet::None;
   bool m_closingSecuritySheet = false;
   std::shared_ptr<void> m_securityAlive = std::make_shared<int>(0);

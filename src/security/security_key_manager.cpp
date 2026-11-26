@@ -4,7 +4,9 @@
 #include "core/deferred_call.h"
 #include "core/log.h"
 #include "i18n/i18n.h"
+#include "security/private_files.h"
 #include "util/base64.h"
+#include "util/string_utils.h"
 
 #include <algorithm>
 #include <array>
@@ -40,19 +42,6 @@ namespace {
   using security_hw::lastLine;
   using security_hw::splitLines;
 
-  std::vector<std::string> split(std::string_view text, char separator) {
-    std::vector<std::string> parts;
-    std::size_t start = 0;
-    while (true) {
-      const std::size_t end = text.find(separator, start);
-      parts.emplace_back(text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
-      if (end == std::string_view::npos) {
-        return parts;
-      }
-      start = end + 1;
-    }
-  }
-
   // gpg --with-colons escapes ':' and control characters as C-style "\xHH".
   std::string unescapeColons(std::string_view field) {
     std::string out;
@@ -73,14 +62,27 @@ namespace {
     return out;
   }
 
-  std::string field(const std::vector<std::string>& fields, std::size_t index) {
+  std::string field(const std::vector<std::string_view>& fields, std::size_t index) {
     return index < fields.size() ? unescapeColons(fields[index]) : std::string{};
   }
 
+  // HID device nodes, where FIDO2 keys appear: /dev/hidraw* on Linux, /dev/uhid* on the BSDs.
+  std::vector<std::string> hidNodes() {
+    std::vector<std::string> nodes;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator("/dev", ec)) {
+      auto name = entry.path().filename().string();
+      if (name.starts_with("hidraw") || name.starts_with("uhid")) {
+        nodes.push_back(std::move(name));
+      }
+    }
+    std::ranges::sort(nodes);
+    return nodes;
+  }
+
   bool isHexFingerprint(std::string_view text) {
-    return (text.size() == 40 || text.size() == 64) && std::ranges::all_of(text, [](char c) {
-             return std::isxdigit(static_cast<unsigned char>(c)) != 0;
-           });
+    return (text.size() == 40 || text.size() == 64)
+        && std::ranges::all_of(text, [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; });
   }
 
   std::string currentUserName() {
@@ -123,20 +125,48 @@ namespace {
 
   bool knownError(std::string_view code) {
     static constexpr std::array<std::string_view, 36> kKnown{
-        "pin-required",   "pin-invalid",        "pin-blocked",     "timeout",           "no-device",
-        "no-card",        "no-pin",             "already-registered", "not-target",     "write-failed",
-        "test-failed",    "test-no-key",        "import-failed",   "import-file-failed", "trust-failed",
-        "remove-failed",  "secret-on-disk",     "ssh-none",        "ssh-exists",        "ssh-file-exists",
-        "ssh-not-on-key", "ssh-encrypted",      "ssh-damaged",     "ssh-invalid",       "ssh-config-edited",
-        "ssh-config-foreign", "ssh-config-link", "ssh-config-conflict", "offline",      "workdir",
-        "no-key",         "start-failed",       "no-file",         "generic",           "pin-not-set",
+        "pin-required",
+        "pin-invalid",
+        "pin-blocked",
+        "timeout",
+        "no-device",
+        "no-card",
+        "no-pin",
+        "already-registered",
+        "not-target",
+        "write-failed",
+        "test-failed",
+        "test-no-key",
         "test-pin-failed",
+        "import-failed",
+        "import-file-failed",
+        "trust-failed",
+        "remove-failed",
+        "secret-on-disk",
+        "ssh-none",
+        "ssh-exists",
+        "ssh-file-exists",
+        "ssh-not-on-key",
+        "ssh-encrypted",
+        "ssh-damaged",
+        "ssh-invalid",
+        "ssh-config-edited",
+        "ssh-config-foreign",
+        "ssh-config-link",
+        "ssh-config-conflict",
+        "offline",
+        "workdir",
+        "no-key",
+        "start-failed",
+        "no-file",
+        "generic",
+        "pin-not-set",
     };
     return std::ranges::contains(kKnown, code);
   }
 } // namespace
 
-SecurityKeyManager::SecurityKeyManager() : m_user(currentUserName()) {}
+SecurityKeyManager::SecurityKeyManager() : m_user(currentUserName()) { detectTools(); }
 
 SecurityKeyManager::~SecurityKeyManager() {
   m_alive.reset();
@@ -155,14 +185,14 @@ SecurityKeyManager::~SecurityKeyManager() {
 
 void SecurityKeyManager::setChangedCallback(ChangedCallback callback) { m_onChanged = std::move(callback); }
 
-bool SecurityKeyManager::fido2ToolsAvailable() {
-  return process::commandExists("pamu2fcfg") && process::commandExists("fido2-token");
-}
-
-bool SecurityKeyManager::gpgAvailable() { return process::commandExists("gpg"); }
-
-bool SecurityKeyManager::sshAvailable() {
-  return process::commandExists("ssh-keygen") && process::commandExists("fido2-token");
+void SecurityKeyManager::detectTools() {
+  m_tools = Tools{
+      .pamu2fcfg = process::commandExists("pamu2fcfg"),
+      .fido2Token = process::commandExists("fido2-token"),
+      .fido2Assert = process::commandExists("fido2-assert"),
+      .gpg = process::commandExists("gpg"),
+      .sshKeygen = process::commandExists("ssh-keygen"),
+  };
 }
 
 bool SecurityKeyManager::testServiceAvailable() { return !pamFile("noctalia-lock-u2f").empty(); }
@@ -180,7 +210,7 @@ std::filesystem::path SecurityKeyManager::authfilePath() {
   return base / "Yubico" / "u2f_keys";
 }
 
-bool SecurityKeyManager::run(std::vector<std::string> args, ResultHandler done, RunExtras extras) {
+bool SecurityKeyManager::run(const std::vector<std::string>& args, ResultHandler done, RunExtras extras) {
   process::RunOptions options;
   options.timeout = std::chrono::seconds(extras.timeoutSeconds);
   options.maxOutputBytes = 1024 * 1024;
@@ -197,7 +227,7 @@ bool SecurityKeyManager::run(std::vector<std::string> args, ResultHandler done, 
           .stdErr = {},
           .onExit =
               [alive = std::weak_ptr<void>(m_alive), done = std::move(done)](process::RunResult result) {
-                DeferredCall::callLater([alive, done, result = std::move(result)]() {
+                DeferredCall::callLater([alive, done, result = std::move(result)] {
                   if (!alive.expired()) {
                     done(result);
                   }
@@ -348,11 +378,17 @@ void SecurityKeyManager::startWithPin(Op op, const std::string& pin) {
 
 void SecurityKeyManager::refresh() {
   m_loaded = true;
-  if (process::commandExists("fido2-token")) {
+  detectTools();
+  m_hidNodes = hidNodes();
+  if (m_tools.fido2Token) {
     loadDevices();
   }
+  refreshAfterDevices();
+}
+
+void SecurityKeyManager::refreshAfterDevices() {
   loadFidoState();
-  if (gpgAvailable()) {
+  if (m_tools.gpg) {
     loadCard();
   }
   loadSsh();
@@ -360,10 +396,10 @@ void SecurityKeyManager::refresh() {
 }
 
 void SecurityKeyManager::startWatching() {
-  if (!process::commandExists("fido2-token")) {
+  if (!m_tools.fido2Token) {
     return;
   }
-  m_probeTimer.startRepeating(kProbeInterval, [this]() { probe(); });
+  m_probeTimer.startRepeating(kProbeInterval, [this] { probe(); });
 }
 
 void SecurityKeyManager::stopWatching() { m_probeTimer.stop(); }
@@ -373,54 +409,59 @@ void SecurityKeyManager::probe() {
   if (m_probing || busy() || !m_loaded || m_pinPrompt.has_value()) {
     return;
   }
+  // Listing the device nodes is cheap; fido2-token only runs when one comes or goes.
+  auto nodes = hidNodes();
+  if (nodes == m_hidNodes) {
+    return;
+  }
+  m_hidNodes = std::move(nodes);
   m_probing = true;
   const std::uint64_t generation = m_devicesGeneration;
-  const bool started = run(
-      {"fido2-token", "-L"},
-      [this, generation](const process::RunResult& result) {
-        m_probing = false;
-        if (generation != m_devicesGeneration || busy()) {
-          return;
-        }
-        const auto found = result ? security_hw::parseFidoDevices(result.out) : std::vector<Device>{};
-        const bool changed = !std::ranges::equal(found, m_devices, [](const Device& a, const Device& b) {
-          return a.path == b.path;
-        });
-        if (changed) {
-          // The OpenPGP card and the resident keys come and go with the key.
-          refresh();
-        }
-      },
-      {.timeoutSeconds = kProbeTimeoutSeconds}
-  );
+  const bool started =
+      run({"fido2-token", "-L"},
+          [this, generation](const process::RunResult& result) {
+            m_probing = false;
+            if (generation != m_devicesGeneration || busy()) {
+              return;
+            }
+            auto found = result ? security_hw::parseFidoDevices(result.out) : std::vector<Device>{};
+            const bool changed = !std::ranges::equal(found, m_devices, [](const Device& a, const Device& b) {
+              return a.path == b.path;
+            });
+            if (changed) {
+              // The OpenPGP card and the resident keys come and go with the key. The listing just
+              // made is reused: only the details of each key are read again.
+              loadDeviceInfo(std::make_shared<std::vector<Device>>(std::move(found)), 0, ++m_devicesGeneration, {});
+              refreshAfterDevices();
+            }
+          },
+          {.timeoutSeconds = kProbeTimeoutSeconds});
   if (!started) {
     m_probing = false;
   }
 }
 
-void SecurityKeyManager::loadDevices(std::function<void()> then) {
+void SecurityKeyManager::loadDevices(const std::function<void()>& then) {
   const std::uint64_t generation = ++m_devicesGeneration;
-  const bool started = run(
-      {"fido2-token", "-L"},
-      [this, generation, then](const process::RunResult& result) {
-        if (generation != m_devicesGeneration) {
-          return;
-        }
-        auto found = std::make_shared<std::vector<Device>>(
-            result ? security_hw::parseFidoDevices(result.out) : std::vector<Device>{}
-        );
-        loadDeviceInfo(std::move(found), 0, generation, then);
-      },
-      {.timeoutSeconds = kProbeTimeoutSeconds}
-  );
+  const bool started =
+      run({"fido2-token", "-L"},
+          [this, generation, then](const process::RunResult& result) {
+            if (generation != m_devicesGeneration) {
+              return;
+            }
+            auto found = std::make_shared<std::vector<Device>>(
+                result ? security_hw::parseFidoDevices(result.out) : std::vector<Device>{}
+            );
+            loadDeviceInfo(std::move(found), 0, generation, then);
+          },
+          {.timeoutSeconds = kProbeTimeoutSeconds});
   if (!started && then) {
     then();
   }
 }
 
 void SecurityKeyManager::loadDeviceInfo(
-    std::shared_ptr<std::vector<Device>> found, std::size_t index, std::uint64_t generation,
-    std::function<void()> then
+    std::shared_ptr<std::vector<Device>> found, std::size_t index, std::uint64_t generation, std::function<void()> then
 ) {
   if (index >= found->size()) {
     m_devices = std::move(*found);
@@ -431,17 +472,16 @@ void SecurityKeyManager::loadDeviceInfo(
     return;
   }
   const std::string path = (*found)[index].path;
-  const bool started = run(
-      {"fido2-token", "-I", path},
-      [this, found, index, generation, then](const process::RunResult& result) {
-        if (generation != m_devicesGeneration) {
-          return;
-        }
-        security_hw::applyFidoInfo((*found)[index], result ? std::string_view(result.out) : std::string_view{});
-        loadDeviceInfo(found, index + 1, generation, then);
-      },
-      {.timeoutSeconds = kProbeTimeoutSeconds}
-  );
+  const bool started =
+      run({"fido2-token", "-I", path},
+          [this, found, index, generation, then](const process::RunResult& result) {
+            if (generation != m_devicesGeneration) {
+              return;
+            }
+            security_hw::applyFidoInfo((*found)[index], result ? std::string_view(result.out) : std::string_view{});
+            loadDeviceInfo(found, index + 1, generation, then);
+          },
+          {.timeoutSeconds = kProbeTimeoutSeconds});
   if (!started) {
     loadDeviceInfo(std::move(found), index + 1, generation, std::move(then));
   }
@@ -482,9 +522,8 @@ void SecurityKeyManager::loadFidoState() {
 
   m_credentials.clear();
   const auto mine = readOwnCredentials(nullptr);
-  m_pinForSignIn = !mine.empty() && std::ranges::all_of(mine, [](const std::string& raw) {
-    return security_hw::credentialRequiresPin(raw);
-  });
+  m_pinForSignIn = !mine.empty()
+      && std::ranges::all_of(mine, [](const std::string& raw) { return security_hw::credentialRequiresPin(raw); });
   for (const auto& raw : mine) {
     m_credentials.push_back({
         .handle = security_hw::credentialKeyHandle(raw),
@@ -508,7 +547,9 @@ void SecurityKeyManager::loadFidoState() {
   }
 }
 
-bool SecurityKeyManager::writeCredentials(const std::vector<std::string>& mine, const std::vector<std::string>& others) {
+bool SecurityKeyManager::writeCredentials(
+    const std::vector<std::string>& mine, const std::vector<std::string>& others
+) {
   const auto path = authfilePath();
   const auto dir = path.parent_path();
   std::error_code ec;
@@ -526,41 +567,19 @@ bool SecurityKeyManager::writeCredentials(const std::vector<std::string>& mine, 
     for (const auto& credential : mine) {
       text += ":" + credential;
     }
-    text += "\n";
+    text += '\n';
   }
-  // A private temporary file next to the authfile, renamed over it: written whole or not at all.
-  std::string tmpl = (dir / ".u2f_keys.XXXXXX").string();
-  const int fd = ::mkstemp(tmpl.data());
-  if (fd < 0) {
-    kLog.warn("could not write {}: {}", path.string(), std::strerror(errno));
+  // Written whole or not at all, with a private temporary file next to it.
+  if (!security_hw::files::replaceFile(path, text, 0600)) {
+    kLog.warn("could not replace {}", path.string());
     return false;
   }
-  bool ok = ::fchmod(fd, 0600) == 0;
-  std::size_t written = 0;
-  while (ok && written < text.size()) {
-    const ssize_t n = ::write(fd, text.data() + written, text.size() - written);
-    if (n < 0 && errno == EINTR) {
-      continue;
-    }
-    ok = n > 0;
-    written += n > 0 ? static_cast<std::size_t>(n) : 0;
-  }
-  ok = ok && ::fsync(fd) == 0;
-  ::close(fd);
-  if (ok) {
-    std::filesystem::rename(tmpl, path, ec);
-    ok = !ec;
-  }
-  if (!ok) {
-    kLog.warn("could not replace {}", path.string());
-    std::filesystem::remove(tmpl, ec);
-  }
-  return ok;
+  return true;
 }
 
 bool SecurityKeyManager::canRegister() const {
   const Device* key = device();
-  return key != nullptr && m_target.kind == security_hw::FidoTargetKind::Own && !(m_pinRequired && !key->clientPin);
+  return key != nullptr && m_target.kind == security_hw::FidoTargetKind::Own && (!m_pinRequired || key->clientPin);
 }
 
 void SecurityKeyManager::requestRegister() {
@@ -578,7 +597,7 @@ void SecurityKeyManager::requestRegister() {
 void SecurityKeyManager::checkAlreadyRegistered(
     std::shared_ptr<std::vector<std::string>> handles, std::size_t index, std::function<void(bool)> then
 ) {
-  if (index >= handles->size() || device() == nullptr || !process::commandExists("fido2-assert")) {
+  if (index >= handles->size() || device() == nullptr || !m_tools.fido2Assert) {
     then(false);
     return;
   }
@@ -586,23 +605,22 @@ void SecurityKeyManager::checkAlreadyRegistered(
   // (another origin, a key that refuses to answer) just isn't a match.
   std::array<unsigned char, 32> challenge{};
   randombytes_buf(challenge.data(), challenge.size());
-  const std::string input = Base64::encode(challenge.data(), challenge.size()) + "\npam://" + hostName() + "\n"
-      + (*handles)[index] + "\n";
-  const bool started = run(
-      {"fido2-assert", "-G", "-t", "up=false", device()->path},
-      [this, handles, index, then](const process::RunResult& result) {
-        if (cancelled()) {
-          then(false);
-          return;
-        }
-        if (result) {
-          then(true);
-          return;
-        }
-        checkAlreadyRegistered(handles, index + 1, then);
-      },
-      {.stdinData = input, .timeoutSeconds = kProbeTimeoutSeconds}
-  );
+  const std::string input =
+      Base64::encode(challenge.data(), challenge.size()) + "\npam://" + hostName() + "\n" + (*handles)[index] + "\n";
+  const bool started =
+      run({"fido2-assert", "-G", "-t", "up=false", device()->path},
+          [this, handles, index, then](const process::RunResult& result) {
+            if (cancelled()) {
+              then(false);
+              return;
+            }
+            if (result) {
+              then(true);
+              return;
+            }
+            checkAlreadyRegistered(handles, index + 1, then);
+          },
+          {.stdinData = input, .timeoutSeconds = kProbeTimeoutSeconds});
   if (!started) {
     checkAlreadyRegistered(std::move(handles), index + 1, std::move(then));
   }
@@ -659,45 +677,46 @@ void SecurityKeyManager::runRegister(const std::string& pin) {
     if (withPin) {
       args.emplace_back("-N");
     }
-    const bool started = run(
-        std::move(args),
-        [this, pinGiven = !pin.empty(), first](const process::RunResult& result) {
-          if (cancelled()) {
-            finishOp();
-            return;
-          }
-          if (!result) {
-            const std::string code =
-                result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, pinGiven);
-            if (!reaskPin(Op::FidoRegister, code)) {
-              fail(Area::Fido, code, lastLine(result.err));
-            }
-            finishOp();
-            // The key may have been pulled out, or its PIN retries changed.
-            loadDevices();
-            return;
-          }
-          const auto added = security_hw::credentialHandles(lastLine(result.out), m_user);
-          if (added.empty()) {
-            fail(Area::Fido, "generic", "pamu2fcfg");
-            finishOp();
-            return;
-          }
-          std::vector<std::string> others;
-          const auto mine = readOwnCredentials(&others);
-          if (!writeCredentials(security_hw::mergeCredentials(mine, added), others)) {
-            fail(Area::Fido, "write-failed", authfilePath().string());
-          } else {
-            succeed(
-                Area::Fido,
-                i18n::tr(first ? "settings.security-keys.fido.registered-first" : "settings.security-keys.fido.registered")
-            );
-          }
-          loadFidoState();
-          finishOp();
-        },
-        {.stdinData = std::move(input), .timeoutSeconds = kTouchTimeoutSeconds}
-    );
+    const bool started =
+        run(args,
+            [this, pinGiven = !pin.empty(), first](const process::RunResult& result) {
+              if (cancelled()) {
+                finishOp();
+                return;
+              }
+              if (!result) {
+                const std::string code = result.timedOut ? "timeout" : security_hw::fidoErrorCode(result.err, pinGiven);
+                if (!reaskPin(Op::FidoRegister, code)) {
+                  fail(Area::Fido, code, lastLine(result.err));
+                }
+                finishOp();
+                // The key may have been pulled out, or its PIN retries changed.
+                loadDevices();
+                return;
+              }
+              const auto added = security_hw::credentialHandles(lastLine(result.out), m_user);
+              if (added.empty()) {
+                fail(Area::Fido, "generic", "pamu2fcfg");
+                finishOp();
+                return;
+              }
+              std::vector<std::string> others;
+              const auto mine = readOwnCredentials(&others);
+              if (!writeCredentials(security_hw::mergeCredentials(mine, added), others)) {
+                fail(Area::Fido, "write-failed", authfilePath().string());
+              } else {
+                succeed(
+                    Area::Fido,
+                    i18n::tr(
+                        first ? "settings.security-keys.fido.registered-first"
+                              : "settings.security-keys.fido.registered"
+                    )
+                );
+              }
+              loadFidoState();
+              finishOp();
+            },
+            {.stdinData = std::move(input), .timeoutSeconds = kTouchTimeoutSeconds});
     if (!started) {
       fail(Area::Fido, "start-failed", "pamu2fcfg");
       finishOp();
@@ -751,7 +770,9 @@ void SecurityKeyManager::setPinForSignIn(bool required) {
   } else if (changed != mine && !writeCredentials(changed, others)) {
     fail(Area::Fido, "write-failed", authfilePath().string());
   } else {
-    succeed(Area::Fido, i18n::tr(required ? "settings.security-keys.fido.pin.on" : "settings.security-keys.fido.pin.off"));
+    succeed(
+        Area::Fido, i18n::tr(required ? "settings.security-keys.fido.pin.on" : "settings.security-keys.fido.pin.off")
+    );
   }
   loadFidoState();
   finishOp();
@@ -764,36 +785,30 @@ void SecurityKeyManager::runTest(const std::string& pin) {
     return;
   }
   const bool pinGiven = !pin.empty();
+  // Ends the test once the authenticator's callback has returned.
+  const auto finishTest = [this] {
+    DeferredCall::callLater([alive = std::weak_ptr<void>(m_alive), this] {
+      if (!alive.expired()) {
+        m_tester.reset();
+        finishOp();
+      }
+    });
+  };
   // The lock screen's own way in: pam_u2f on the "noctalia-lock-u2f" service.
   m_tester = std::make_unique<SecurityKeyAuthenticator>();
-  m_tester->setCueCallback([this]() { setStage("touch"); });
+  m_tester->setCueCallback([this] { setStage("touch"); });
   // The key wants its PIN: ask for it, then run the test again with it.
-  m_tester->setPinCallback([this]() {
+  m_tester->setPinCallback([this, finishTest] {
     m_pinPrompt = PinPrompt{.op = Op::FidoTest};
-    DeferredCall::callLater([alive = std::weak_ptr<void>(m_alive), this]() {
-      if (!alive.expired()) {
-        m_tester.reset();
-        finishOp();
-      }
-    });
+    finishTest();
   });
-  m_tester->setAuthenticatedCallback([this]() {
+  m_tester->setAuthenticatedCallback([this, finishTest] {
     succeed(Area::Fido, i18n::tr("settings.security-keys.fido.test-ok"));
-    DeferredCall::callLater([alive = std::weak_ptr<void>(m_alive), this]() {
-      if (!alive.expired()) {
-        m_tester.reset();
-        finishOp();
-      }
-    });
+    finishTest();
   });
-  m_tester->setGaveUpCallback([this, pinGiven](bool cued) {
+  m_tester->setGaveUpCallback([this, pinGiven, finishTest](bool cued) {
     fail(Area::Fido, !cued ? "test-no-key" : (pinGiven ? "test-pin-failed" : "timeout"));
-    DeferredCall::callLater([alive = std::weak_ptr<void>(m_alive), this]() {
-      if (!alive.expired()) {
-        m_tester.reset();
-        finishOp();
-      }
-    });
+    finishTest();
   });
   notifyChanged();
   if (pinGiven) {
@@ -805,54 +820,53 @@ void SecurityKeyManager::runTest(const std::string& pin) {
 
 // -- OpenPGP card -------------------------------------------------------------------------------
 
-void SecurityKeyManager::loadCard(std::function<void()> then) {
+void SecurityKeyManager::loadCard(const std::function<void()>& then) {
   m_cardLoading = true;
-  const bool started = run(
-      {"gpg", "--card-status", "--with-colons"},
-      [this, then](const process::RunResult& result) {
-        m_cardLoading = false;
-        if (!result) {
-          m_card.reset();
-          m_keyState = KeyState::None;
-          m_trusted = false;
-          m_primaryFingerprint.clear();
-          notifyChanged();
-          if (then) {
-            then();
-          }
-          return;
-        }
-        CardInfo card;
-        for (const auto& line : splitLines(result.out)) {
-          const auto fields = split(line, ':');
-          const std::string& kind = fields.front();
-          if (kind == "Reader") {
-            card.reader = field(fields, 1);
-          } else if (kind == "vendor") {
-            card.vendor = field(fields, 2);
-          } else if (kind == "serial") {
-            card.serial = field(fields, 1);
-          } else if (kind == "name") {
-            card.holder = field(fields, 1);
-            const std::string last = field(fields, 2);
-            if (!last.empty()) {
-              card.holder += card.holder.empty() ? last : " " + last;
+  const bool started =
+      run({"gpg", "--card-status", "--with-colons"},
+          [this, then](const process::RunResult& result) {
+            m_cardLoading = false;
+            if (!result) {
+              m_card.reset();
+              m_keyState = KeyState::None;
+              m_trusted = false;
+              m_primaryFingerprint.clear();
+              notifyChanged();
+              if (then) {
+                then();
+              }
+              return;
             }
-          } else if (kind == "url") {
-            card.url = field(fields, 1);
-          } else if (kind == "fpr") {
-            for (std::size_t i = 1; i < fields.size(); ++i) {
-              if (isHexFingerprint(fields[i])) {
-                card.fingerprints.push_back(fields[i]);
+            CardInfo card;
+            for (const auto& line : splitLines(result.out)) {
+              const auto fields = StringUtils::split(line, ':');
+              const std::string_view kind = fields.front();
+              if (kind == "Reader") {
+                card.reader = field(fields, 1);
+              } else if (kind == "vendor") {
+                card.vendor = field(fields, 2);
+              } else if (kind == "serial") {
+                card.serial = field(fields, 1);
+              } else if (kind == "name") {
+                card.holder = field(fields, 1);
+                const std::string last = field(fields, 2);
+                if (!last.empty()) {
+                  card.holder += card.holder.empty() ? last : " " + last;
+                }
+              } else if (kind == "url") {
+                card.url = field(fields, 1);
+              } else if (kind == "fpr") {
+                for (std::size_t i = 1; i < fields.size(); ++i) {
+                  if (isHexFingerprint(fields[i])) {
+                    card.fingerprints.emplace_back(fields[i]);
+                  }
+                }
               }
             }
-          }
-        }
-        m_card = std::move(card);
-        loadKeyState(then);
-      },
-      {.timeoutSeconds = kProbeTimeoutSeconds}
-  );
+            m_card = std::move(card);
+            loadKeyState(then);
+          },
+          {.timeoutSeconds = kProbeTimeoutSeconds});
   if (!started) {
     m_cardLoading = false;
     if (then) {
@@ -861,7 +875,7 @@ void SecurityKeyManager::loadCard(std::function<void()> then) {
   }
 }
 
-void SecurityKeyManager::loadKeyState(std::function<void()> then) {
+void SecurityKeyManager::loadKeyState(const std::function<void()>& then) {
   const auto done = [this](const std::function<void()>& next) {
     notifyChanged();
     if (next) {
@@ -876,42 +890,40 @@ void SecurityKeyManager::loadKeyState(std::function<void()> then) {
     return;
   }
   const std::string fpr = m_card->fingerprints.front();
-  const bool started = run(
-      {"gpg", "--list-keys", "--with-colons", fpr},
-      [this, fpr, then, done](const process::RunResult& pub) {
-        m_trusted = false;
-        m_primaryFingerprint.clear();
-        if (!pub) {
-          m_keyState = KeyState::Missing;
-          done(then);
-          return;
-        }
-        bool afterPub = false;
-        for (const auto& line : splitLines(pub.out)) {
-          const auto fields = split(line, ':');
-          if ((fields.front() == "pub" || fields.front() == "sec") && m_primaryFingerprint.empty() && !afterPub) {
-            m_trusted = field(fields, 8) == "u";
-            afterPub = true;
-          } else if (fields.front() == "fpr" && afterPub) {
-            m_primaryFingerprint = field(fields, 9);
-            break;
-          }
-        }
-        const bool listing = run(
-            {"gpg", "--list-secret-keys", "--with-colons", fpr},
-            [this, then, done](const process::RunResult& secret) {
-              m_keyState = secret && !lastLine(secret.out).empty() ? KeyState::Ready : KeyState::PublicOnly;
+  const bool started =
+      run({"gpg", "--list-keys", "--with-colons", fpr},
+          [this, fpr, then, done](const process::RunResult& pub) {
+            m_trusted = false;
+            m_primaryFingerprint.clear();
+            if (!pub) {
+              m_keyState = KeyState::Missing;
               done(then);
-            },
-            {.timeoutSeconds = kGpgTimeoutSeconds}
-        );
-        if (!listing) {
-          m_keyState = KeyState::PublicOnly;
-          done(then);
-        }
-      },
-      {.timeoutSeconds = kGpgTimeoutSeconds}
-  );
+              return;
+            }
+            bool afterPub = false;
+            for (const auto& line : splitLines(pub.out)) {
+              const auto fields = StringUtils::split(line, ':');
+              if ((fields.front() == "pub" || fields.front() == "sec") && m_primaryFingerprint.empty() && !afterPub) {
+                m_trusted = field(fields, 8) == "u";
+                afterPub = true;
+              } else if (fields.front() == "fpr" && afterPub) {
+                m_primaryFingerprint = field(fields, 9);
+                break;
+              }
+            }
+            const bool listing =
+                run({"gpg", "--list-secret-keys", "--with-colons", fpr},
+                    [this, then, done](const process::RunResult& secret) {
+                      m_keyState = secret && !lastLine(secret.out).empty() ? KeyState::Ready : KeyState::PublicOnly;
+                      done(then);
+                    },
+                    {.timeoutSeconds = kGpgTimeoutSeconds});
+            if (!listing) {
+              m_keyState = KeyState::PublicOnly;
+              done(then);
+            }
+          },
+          {.timeoutSeconds = kGpgTimeoutSeconds});
   if (!started) {
     done(then);
   }
@@ -932,7 +944,9 @@ void SecurityKeyManager::importPublicKey(bool offline) {
   const bool updating = m_keyState == KeyState::Ready;
   setStage("fetch");
   const std::string url = m_card->url;
-  if (!(url.starts_with("https://") || url.starts_with("http://") || url.starts_with("hkps://")
+  if (!(url.starts_with("https://")
+        || url.starts_with("http://")
+        || url.starts_with("hkps://")
         || url.starts_with("hkp://"))) {
     fetchFromKeyserver(updating);
     return;
@@ -1000,22 +1014,21 @@ void SecurityKeyManager::importPublicKeyFromFile(const std::filesystem::path& fi
     return;
   }
   setStage("import");
-  const bool started = run(
-      {"gpg", "--batch", "--import", file.string()},
-      [this](const process::RunResult& result) {
-        if (cancelled()) {
-          finishOp();
-          return;
-        }
-        if (result) {
-          linkCard(i18n::tr("settings.security-keys.gpg.imported"));
-          return;
-        }
-        fail(Area::Gpg, "import-file-failed", lastLine(result.err));
-        finishOp();
-      },
-      {.timeoutSeconds = kGpgTimeoutSeconds}
-  );
+  const bool started =
+      run({"gpg", "--batch", "--import", file.string()},
+          [this](const process::RunResult& result) {
+            if (cancelled()) {
+              finishOp();
+              return;
+            }
+            if (result) {
+              linkCard(i18n::tr("settings.security-keys.gpg.imported"));
+              return;
+            }
+            fail(Area::Gpg, "import-file-failed", lastLine(result.err));
+            finishOp();
+          },
+          {.timeoutSeconds = kGpgTimeoutSeconds});
   if (!started) {
     fail(Area::Gpg, "start-failed", "gpg");
     finishOp();
@@ -1025,14 +1038,13 @@ void SecurityKeyManager::importPublicKeyFromFile(const std::filesystem::path& fi
 void SecurityKeyManager::linkCard(std::string message) {
   // Reading the card with the public key in the keyring creates the secret-key stubs that point
   // gpg at it.
-  const bool started = run(
-      {"gpg", "--card-status"},
-      [this, message](const process::RunResult&) {
-        succeed(Area::Gpg, message);
-        loadCard([this]() { finishOp(); });
-      },
-      {.timeoutSeconds = kProbeTimeoutSeconds}
-  );
+  const bool started =
+      run({"gpg", "--card-status"},
+          [this, message](const process::RunResult&) {
+            succeed(Area::Gpg, message);
+            loadCard([this] { finishOp(); });
+          },
+          {.timeoutSeconds = kProbeTimeoutSeconds});
   if (!started) {
     succeed(Area::Gpg, std::move(message));
     finishOp();
@@ -1044,24 +1056,23 @@ void SecurityKeyManager::trustKey() {
     return;
   }
   // The card and the key state first: the primary fingerprint comes from the keyring.
-  loadCard([this]() {
+  loadCard([this] {
     if (m_primaryFingerprint.empty()) {
       fail(Area::Gpg, "trust-failed");
       finishOp();
       return;
     }
-    const bool started = run(
-        {"gpg", "--import-ownertrust"},
-        [this](const process::RunResult& result) {
-          if (result) {
-            succeed(Area::Gpg, i18n::tr("settings.security-keys.gpg.trusted-done"));
-          } else {
-            fail(Area::Gpg, "trust-failed", lastLine(result.err));
-          }
-          loadKeyState([this]() { finishOp(); });
-        },
-        {.stdinData = m_primaryFingerprint + ":6:\n", .timeoutSeconds = kGpgTimeoutSeconds}
-    );
+    const bool started =
+        run({"gpg", "--import-ownertrust"},
+            [this](const process::RunResult& result) {
+              if (result) {
+                succeed(Area::Gpg, i18n::tr("settings.security-keys.gpg.trusted-done"));
+              } else {
+                fail(Area::Gpg, "trust-failed", lastLine(result.err));
+              }
+              loadKeyState([this] { finishOp(); });
+            },
+            {.stdinData = m_primaryFingerprint + ":6:\n", .timeoutSeconds = kGpgTimeoutSeconds});
     if (!started) {
       fail(Area::Gpg, "trust-failed");
       finishOp();
@@ -1073,42 +1084,41 @@ void SecurityKeyManager::removeKey() {
   if (!beginOp(Op::GpgRemove, Area::Gpg)) {
     return;
   }
-  loadCard([this]() {
+  loadCard([this] {
     if (m_primaryFingerprint.empty()) {
       fail(Area::Gpg, "remove-failed", "not in the keyring");
       finishOp();
       return;
     }
     const std::string primary = m_primaryFingerprint;
-    const bool started = run(
-        {"gpg", "--list-secret-keys", "--with-colons", primary},
-        [this, primary](const process::RunResult& secret) {
-          const bool hasSecret = secret && !lastLine(secret.out).empty();
-          // Only ever stubs: a secret part kept on disk would be lost for good.
-          if (hasSecret && security_hw::secretOnDisk(secret.out)) {
-            fail(Area::Gpg, "secret-on-disk");
-            finishOp();
-            return;
-          }
-          const bool deleting = run(
-              {"gpg", "--batch", "--yes", hasSecret ? "--delete-secret-and-public-keys" : "--delete-keys", primary},
-              [this](const process::RunResult& result) {
-                if (result) {
-                  succeed(Area::Gpg, i18n::tr("settings.security-keys.gpg.removed"));
-                } else {
-                  fail(Area::Gpg, "remove-failed", lastLine(result.err));
-                }
-                loadCard([this]() { finishOp(); });
-              },
-              {.timeoutSeconds = kGpgTimeoutSeconds}
-          );
-          if (!deleting) {
-            fail(Area::Gpg, "start-failed", "gpg");
-            finishOp();
-          }
-        },
-        {.timeoutSeconds = kGpgTimeoutSeconds}
-    );
+    const bool started =
+        run({"gpg", "--list-secret-keys", "--with-colons", primary},
+            [this, primary](const process::RunResult& secret) {
+              const bool hasSecret = secret && !lastLine(secret.out).empty();
+              // Only ever stubs: a secret part kept on disk would be lost for good.
+              if (hasSecret && security_hw::secretOnDisk(secret.out)) {
+                fail(Area::Gpg, "secret-on-disk");
+                finishOp();
+                return;
+              }
+              const bool deleting =
+                  run({"gpg", "--batch", "--yes", hasSecret ? "--delete-secret-and-public-keys" : "--delete-keys",
+                       primary},
+                      [this](const process::RunResult& result) {
+                        if (result) {
+                          succeed(Area::Gpg, i18n::tr("settings.security-keys.gpg.removed"));
+                        } else {
+                          fail(Area::Gpg, "remove-failed", lastLine(result.err));
+                        }
+                        loadCard([this] { finishOp(); });
+                      },
+                      {.timeoutSeconds = kGpgTimeoutSeconds});
+              if (!deleting) {
+                fail(Area::Gpg, "start-failed", "gpg");
+                finishOp();
+              }
+            },
+            {.timeoutSeconds = kGpgTimeoutSeconds});
     if (!started) {
       fail(Area::Gpg, "start-failed", "gpg");
       finishOp();

@@ -132,7 +132,7 @@ namespace settings {
           .align = FlexAlign::Start,
           .gap = Style::spaceSm * scale,
           .padding = Style::spaceSm * scale,
-          .fill = colorSpecFromRole(ColorRole::ErrorContainer, 0.5F),
+          .fill = colorSpecFromRole(ColorRole::ErrorContainer),
           .radius = Style::scaledRadiusMd(scale),
           .fillWidth = true,
       });
@@ -149,8 +149,9 @@ namespace settings {
       parent.addChild(std::move(row));
     }
 
-    // "Label: value" line.
-    void addInfoRow(Flex& parent, const std::string& label, const std::string& value, float scale) {
+    // "Label: value" line. <ellipsize> keeps a long value on one line, cut in the middle.
+    void
+    addInfoRow(Flex& parent, const std::string& label, const std::string& value, float scale, bool ellipsize = false) {
       auto row = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale});
       row->addChild(
           ui::label({
@@ -164,7 +165,8 @@ namespace settings {
               .text = value,
               .fontSize = Style::fontSizeBody * scale,
               .color = colorSpecFromRole(ColorRole::OnSurface),
-              .maxLines = 0,
+              .maxLines = ellipsize ? 1 : 0,
+              .ellipsize = ellipsize ? std::optional{TextEllipsize::Middle} : std::nullopt,
               .flexGrow = 1.0F,
           })
       );
@@ -216,7 +218,9 @@ namespace settings {
           .align = FlexAlign::Stretch,
           .gap = Style::spaceXs * scale,
           .padding = Style::spaceSm * scale,
-          .fill = colorSpecFromRole(danger ? ColorRole::ErrorContainer : ColorRole::SurfaceContainerHigh, danger ? 0.5F : 1.0F),
+          .fill = colorSpecFromRole(
+              danger ? ColorRole::ErrorContainer : ColorRole::SurfaceContainerHigh, danger ? 0.5F : 1.0F
+          ),
           .radius = Style::scaledRadiusMd(scale),
           .fillWidth = true,
       });
@@ -308,7 +312,7 @@ namespace settings {
       row->addChild(std::move(label));
       row->addChild(actionButton(
           i18n::tr("settings.security-hardware.cancel"), {}, true, ButtonVariant::Default, scale,
-          [&manager]() { manager.cancel(); }
+          [&manager] { manager.cancel(); }
       ));
       parent.addChild(std::move(row));
     }
@@ -322,13 +326,6 @@ namespace settings {
       return std::ranges::all_of(FingerprintManager::selectableFingers(), [&](const std::string& finger) {
         return std::ranges::contains(manager.enrolledFingers(), finger);
       });
-    }
-
-    std::string shorten(const std::string& text, std::size_t size) {
-      if (text.size() <= size) {
-        return text;
-      }
-      return text.substr(0, size - 1) + "…";
     }
 
     std::string pinOpTitle(Op op) {
@@ -387,7 +384,7 @@ namespace settings {
       auto buttons = buttonRow(scale);
       buttons->addChild(actionButton(
           i18n::tr("settings.security-hardware.refresh"), "refresh", true, ButtonVariant::Default, scale,
-          [&manager]() { manager.refresh(); }
+          [&manager] { manager.refresh(); }
       ));
       block.addChild(std::move(buttons));
       return;
@@ -457,15 +454,15 @@ namespace settings {
       }
       addDeleteControls(
           *row, state.pendingFingerDelete == finger, !busy, scale,
-          [&state, finger, rebuild = actions.requestRebuild]() {
+          [&state, finger, rebuild = actions.requestRebuild] {
             state.pendingFingerDelete = finger;
             rebuild();
           },
-          [&state, &manager, finger]() {
+          [&state, &manager, finger] {
             state.pendingFingerDelete.clear();
             manager.deleteFinger(finger);
           },
-          [&state, rebuild = actions.requestRebuild]() {
+          [&state, rebuild = actions.requestRebuild] {
             state.pendingFingerDelete.clear();
             rebuild();
           }
@@ -485,15 +482,15 @@ namespace settings {
     if (manager.mode() == FingerprintManager::Mode::Verifying) {
       buttons->addChild(actionButton(
           i18n::tr("settings.fingerprint.stop-test"), "close", true, ButtonVariant::Default, scale,
-          [&manager]() { manager.cancel(); }
+          [&manager] { manager.cancel(); }
       ));
     } else {
       buttons->addChild(actionButton(
           i18n::tr("settings.fingerprint.test"), "fingerprint", !busy && !manager.enrolledFingers().empty(),
-          ButtonVariant::Default, scale, [&manager]() { manager.startVerify(); }
+          ButtonVariant::Default, scale, [&manager] { manager.startVerify(); }
       ));
     }
-    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager]() {
+    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager] {
       manager.refresh();
     }));
     block.addChild(std::move(buttons));
@@ -519,7 +516,7 @@ namespace settings {
           const bool enrolled = std::ranges::contains(manager.enrolledFingers(), finger);
           row->addChild(actionButton(
               FingerprintManager::fingerLabel(finger), enrolled ? "check" : "fingerprint", !enrolled,
-              ButtonVariant::Outline, scale, [&manager, finger]() { manager.startEnroll(finger); }
+              ButtonVariant::Outline, scale, [&manager, finger] { manager.startEnroll(finger); }
           ));
         }
         content->addChild(std::move(row));
@@ -583,7 +580,7 @@ namespace settings {
       if (!manager.enrollCompleted()) {
         buttons->addChild(actionButton(
             i18n::tr("settings.fingerprint.try-again"), "refresh", true, ButtonVariant::Default, scale,
-            [&manager, finger = manager.enrollFinger()]() { manager.startEnroll(finger); }
+            [&manager, finger = manager.enrollFinger()] { manager.startEnroll(finger); }
         ));
       }
       buttons->addChild(
@@ -659,15 +656,15 @@ namespace settings {
       );
       addDeleteControls(
           *row, state.pendingCredentialRemove == credential.handle, !busy, scale,
-          [&state, handle = credential.handle, rebuild = actions.requestRebuild]() {
+          [&state, handle = credential.handle, rebuild = actions.requestRebuild] {
             state.pendingCredentialRemove = handle;
             rebuild();
           },
-          [&state, &manager, handle = credential.handle]() {
+          [&state, &manager, handle = credential.handle] {
             state.pendingCredentialRemove.clear();
             manager.removeCredential(handle);
           },
-          [&state, rebuild = actions.requestRebuild]() {
+          [&state, rebuild = actions.requestRebuild] {
             state.pendingCredentialRemove.clear();
             rebuild();
           },
@@ -709,16 +706,19 @@ namespace settings {
 
     auto buttons = buttonRow(scale);
     buttons->addChild(actionButton(
-        i18n::tr(credentials.empty() ? "settings.security-keys.fido.register" : "settings.security-keys.fido.register-another"),
-        "add", !busy && manager.canRegister(), ButtonVariant::Primary, scale, [&manager]() { manager.requestRegister(); }
+        i18n::tr(
+            credentials.empty() ? "settings.security-keys.fido.register"
+                                : "settings.security-keys.fido.register-another"
+        ),
+        "add", !busy && manager.canRegister(), ButtonVariant::Primary, scale, [&manager] { manager.requestRegister(); }
     ));
     if (SecurityKeyManager::testServiceAvailable()) {
       buttons->addChild(actionButton(
           i18n::tr("settings.security-keys.fido.test"), "key", !busy && device != nullptr && !credentials.empty(),
-          ButtonVariant::Default, scale, [&manager]() { manager.startTest(); }
+          ButtonVariant::Default, scale, [&manager] { manager.startTest(); }
       ));
     }
-    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager]() {
+    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager] {
       manager.refresh();
     }));
     block.addChild(std::move(buttons));
@@ -763,7 +763,7 @@ namespace settings {
       row->addChild(monoLabel(security_hw::formatFingerprint(card->fingerprints.front()), scale));
       row->addChild(iconButton(
           "copy", i18n::tr("settings.security-hardware.copy"), true, scale,
-          [&manager, fpr = card->fingerprints.front(), copy = actions.copyText]() {
+          [&manager, fpr = card->fingerprints.front(), copy = actions.copyText] {
             if (copy && copy(fpr)) {
               manager.setStatus(Area::Gpg, i18n::tr("settings.security-hardware.copied"), false);
             }
@@ -811,7 +811,7 @@ namespace settings {
     }
     buttons->addChild(actionButton(
         i18n::tr(importKey), "cloud-download", !busy, ButtonVariant::Primary, scale,
-        [&manager, offline = actions.offline]() { manager.importPublicKey(offline); }
+        [&manager, offline = actions.offline] { manager.importPublicKey(offline); }
     ));
     if (keyState != KeyState::Ready) {
       buttons->addChild(actionButton(
@@ -822,21 +822,21 @@ namespace settings {
     if (inKeyring && !manager.ultimatelyTrusted()) {
       buttons->addChild(actionButton(
           i18n::tr("settings.security-keys.gpg.trust"), "user-check", !busy, ButtonVariant::Default, scale,
-          [&manager]() { manager.trustKey(); }
+          [&manager] { manager.trustKey(); }
       ));
     }
     if (inKeyring) {
       if (state.pendingGpgRemove) {
         buttons->addChild(actionButton(
             i18n::tr("settings.security-keys.gpg.confirm-remove"), "trash", !busy, ButtonVariant::Destructive, scale,
-            [&state, &manager]() {
+            [&state, &manager] {
               state.pendingGpgRemove = false;
               manager.removeKey();
             }
         ));
         buttons->addChild(iconButton(
             "close", i18n::tr("settings.security-hardware.cancel"), true, scale,
-            [&state, rebuild = actions.requestRebuild]() {
+            [&state, rebuild = actions.requestRebuild] {
               state.pendingGpgRemove = false;
               rebuild();
             }
@@ -844,14 +844,14 @@ namespace settings {
       } else {
         buttons->addChild(actionButton(
             i18n::tr("settings.security-keys.gpg.remove"), "trash", !busy, ButtonVariant::Ghost, scale,
-            [&state, rebuild = actions.requestRebuild]() {
+            [&state, rebuild = actions.requestRebuild] {
               state.pendingGpgRemove = true;
               rebuild();
             }
         ));
       }
     }
-    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager]() {
+    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager] {
       manager.refresh();
     }));
     block.addChild(std::move(buttons));
@@ -861,9 +861,53 @@ namespace settings {
 
   namespace {
 
+    // How long ssh keeps an authenticated connection to <key>'s git host for later ones.
+    void addPersistSelect(
+        Flex& box, SecurityKeyManager& manager, const SecurityKeyManager::SshKey& key, bool enabled, float scale
+    ) {
+      std::vector<std::string> options;
+      std::vector<int> values(kPersistChoices.begin(), kPersistChoices.end());
+      if (!std::ranges::contains(values, key.persistMinutes)) {
+        values.push_back(key.persistMinutes);
+        std::ranges::sort(values);
+      }
+      std::size_t selected = 0;
+      for (std::size_t i = 0; i < values.size(); ++i) {
+        options.push_back(
+            values[i] == 0 ? i18n::tr("settings.security-keys.ssh.persist-never")
+                           : i18n::tr("settings.security-keys.ssh.minutes", "minutes", std::to_string(values[i]))
+        );
+        if (values[i] == key.persistMinutes) {
+          selected = i;
+        }
+      }
+      auto row = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale, .fillWidth = true});
+      auto label = bodyLabel(i18n::tr("settings.security-keys.ssh.persist-label", "host", key.host), scale);
+      label->setFlexGrow(1.0F);
+      row->addChild(std::move(label));
+      row->addChild(
+          ui::select({
+              .options = std::move(options),
+              .selectedIndex = selected,
+              .fontSize = Style::fontSizeBody * scale,
+              .controlHeight = Style::controlHeightSm * scale,
+              .enabled = enabled,
+              .width = 160.0F * scale,
+              .onSelectionChanged = [&manager, name = key.name, values,
+                                     current = key.persistMinutes](std::size_t index, std::string_view) {
+                if (index < values.size() && values[index] != current) {
+                  manager.setSshPersist(name, values[index]);
+                }
+              },
+          })
+      );
+      box.addChild(std::move(row));
+      box.addChild(captionLabel(i18n::tr("settings.security-keys.ssh.persist-hint"), scale));
+    }
+
     void addSshKey(
-        Flex& block, SecurityKeyManager& manager, SecurityHardwareUiState& state, const SecurityHardwareActions& actions,
-        const SecurityKeyManager::SshKey& key, float scale
+        Flex& block, SecurityKeyManager& manager, SecurityHardwareUiState& state,
+        const SecurityHardwareActions& actions, const SecurityKeyManager::SshKey& key, float scale
     ) {
       using HostState = SecurityKeyManager::HostState;
       const bool busy = manager.busy();
@@ -891,12 +935,20 @@ namespace settings {
       title->addChild(captionLabel(key.type, scale));
       box->addChild(std::move(title));
       if (!key.user.empty()) {
-        addInfoRow(*box, i18n::tr("settings.security-keys.ssh.user"), shorten(key.user, 24), scale);
+        addInfoRow(*box, i18n::tr("settings.security-keys.ssh.user"), key.user, scale, /*ellipsize=*/true);
       }
       if (!key.fingerprint.empty()) {
         box->addChild(monoLabel(key.fingerprint, scale));
       }
-      box->addChild(captionLabel("~/.ssh/" + shorten(key.name, 60), scale));
+      box->addChild(
+          ui::label({
+              .text = "~/.ssh/" + key.name,
+              .fontSize = Style::fontSizeCaption * scale,
+              .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
+              .maxLines = 1,
+              .ellipsize = TextEllipsize::Middle,
+          })
+      );
       if (!key.host.empty()) {
         if (key.hostState == HostState::On) {
           box->addChild(captionLabel(i18n::tr("settings.security-keys.ssh.host-on", "host", key.host), scale));
@@ -915,51 +967,15 @@ namespace settings {
 
       // Connection reuse for the git host, once ssh uses the key for it.
       if (key.hostState == HostState::On) {
-        std::vector<std::string> options;
-        std::vector<int> values(kPersistChoices.begin(), kPersistChoices.end());
-        if (!std::ranges::contains(values, key.persistMinutes)) {
-          values.push_back(key.persistMinutes);
-          std::ranges::sort(values);
-        }
-        std::size_t selected = 0;
-        for (std::size_t i = 0; i < values.size(); ++i) {
-          options.push_back(
-              values[i] == 0 ? i18n::tr("settings.security-keys.ssh.persist-never")
-                             : i18n::tr("settings.security-keys.ssh.minutes", "minutes", std::to_string(values[i]))
-          );
-          if (values[i] == key.persistMinutes) {
-            selected = i;
-          }
-        }
-        auto row = ui::row({.align = FlexAlign::Center, .gap = Style::spaceSm * scale, .fillWidth = true});
-        auto label = bodyLabel(i18n::tr("settings.security-keys.ssh.persist-label", "host", key.host), scale);
-        label->setFlexGrow(1.0F);
-        row->addChild(std::move(label));
-        row->addChild(
-            ui::select({
-                .options = std::move(options),
-                .selectedIndex = selected,
-                .fontSize = Style::fontSizeBody * scale,
-                .controlHeight = Style::controlHeightSm * scale,
-                .enabled = !busy,
-                .width = 160.0F * scale,
-                .onSelectionChanged =
-                    [&manager, name = key.name, values, current = key.persistMinutes](std::size_t index, std::string_view) {
-                      if (index < values.size() && values[index] != current) {
-                        manager.setSshPersist(name, values[index]);
-                      }
-                    },
-            })
-        );
-        box->addChild(std::move(row));
-        box->addChild(captionLabel(i18n::tr("settings.security-keys.ssh.persist-hint"), scale));
+        addPersistSelect(*box, manager, key, !busy, scale);
       }
 
-      auto buttons = ui::row({.align = FlexAlign::Center, .wrap = true, .gap = Style::spaceXs * scale, .fillWidth = true});
+      auto buttons =
+          ui::row({.align = FlexAlign::Center, .wrap = true, .gap = Style::spaceXs * scale, .fillWidth = true});
       if (!key.publicKey.empty()) {
         buttons->addChild(iconButton(
             "copy", i18n::tr("settings.security-keys.ssh.copy"), true, scale,
-            [&manager, text = key.publicKey, copy = actions.copyText]() {
+            [&manager, text = key.publicKey, copy = actions.copyText] {
               if (copy && copy(text)) {
                 manager.setStatus(Area::Ssh, i18n::tr("settings.security-keys.ssh.copied"), false);
               }
@@ -969,9 +985,12 @@ namespace settings {
       if (!key.host.empty() && (key.hostState == HostState::On || key.hostState == HostState::Off)) {
         const bool on = key.hostState == HostState::On;
         buttons->addChild(actionButton(
-            i18n::tr(on ? "settings.security-keys.ssh.host-disable" : "settings.security-keys.ssh.host-enable", "host", key.host),
+            i18n::tr(
+                on ? "settings.security-keys.ssh.host-disable" : "settings.security-keys.ssh.host-enable", "host",
+                key.host
+            ),
             on ? "unlink" : "link", !busy, on ? ButtonVariant::Ghost : ButtonVariant::Secondary, scale,
-            [&manager, name = key.name, on]() { manager.setSshHost(name, !on); }
+            [&manager, name = key.name, on] { manager.setSshHost(name, !on); }
         ));
       }
       auto spacer = ui::row({});
@@ -982,19 +1001,21 @@ namespace settings {
       if (state.pendingSshRemove == key.name) {
         buttons->addChild(actionButton(
             i18n::tr("settings.security-hardware.confirm-remove"), "x", !busy, ButtonVariant::Destructive, scale,
-            [&state, &manager, name = key.name]() {
+            [&state, &manager, name = key.name] {
               state.pendingSshRemove.clear();
               manager.removeSshCopy(name);
             }
         ));
-        buttons->addChild(iconButton("close", i18n::tr("settings.security-hardware.cancel"), true, scale, [&state, rebuild]() {
-          state.pendingSshRemove.clear();
-          rebuild();
-        }));
+        buttons->addChild(
+            iconButton("close", i18n::tr("settings.security-hardware.cancel"), true, scale, [&state, rebuild] {
+              state.pendingSshRemove.clear();
+              rebuild();
+            })
+        );
       } else if (!deleting) {
         buttons->addChild(actionButton(
             i18n::tr("settings.security-keys.ssh.remove-copy"), "x", !busy, ButtonVariant::Ghost, scale,
-            [&state, rebuild, name = key.name]() {
+            [&state, rebuild, name = key.name] {
               state.pendingSshRemove = name;
               state.pendingSshDelete.clear();
               rebuild();
@@ -1005,19 +1026,21 @@ namespace settings {
         if (deleting) {
           buttons->addChild(actionButton(
               i18n::tr("settings.security-keys.ssh.confirm-delete"), "trash", !busy, ButtonVariant::Destructive, scale,
-              [&state, &manager, name = key.name]() {
+              [&state, &manager, name = key.name] {
                 state.pendingSshDelete.clear();
                 manager.requestSshDelete(name);
               }
           ));
-          buttons->addChild(iconButton("close", i18n::tr("settings.security-hardware.cancel"), true, scale, [&state, rebuild]() {
-            state.pendingSshDelete.clear();
-            rebuild();
-          }));
+          buttons->addChild(
+              iconButton("close", i18n::tr("settings.security-hardware.cancel"), true, scale, [&state, rebuild] {
+                state.pendingSshDelete.clear();
+                rebuild();
+              })
+          );
         } else {
           buttons->addChild(actionButton(
               i18n::tr("settings.security-keys.ssh.delete"), "trash", !busy, ButtonVariant::Ghost, scale,
-              [&state, rebuild, name = key.name]() {
+              [&state, rebuild, name = key.name] {
                 state.pendingSshDelete = name;
                 state.pendingSshRemove.clear();
                 rebuild();
@@ -1058,11 +1081,11 @@ namespace settings {
       auto buttons = buttonRow(scale);
       buttons->addChild(actionButton(
           i18n::tr("settings.security-hardware.cancel"), {}, true, ButtonVariant::Default, scale,
-          [&manager]() { manager.clearSshReplaceCandidate(); }
+          [&manager] { manager.clearSshReplaceCandidate(); }
       ));
       buttons->addChild(actionButton(
           i18n::tr("settings.security-keys.ssh.replace"), "refresh", true, ButtonVariant::Destructive, scale,
-          [&manager, options = *replace]() mutable {
+          [&manager, options = *replace] mutable {
             options.replace = true;
             manager.requestSshCreate(options);
           }
@@ -1072,7 +1095,9 @@ namespace settings {
 
     if (const auto& created = manager.sshCreated(); created.has_value()) {
       auto box = card(scale);
-      box->addChild(bodyLabel(i18n::tr("settings.security-keys.ssh.created", "name", "~/.ssh/" + created->name), scale));
+      box->addChild(
+          bodyLabel(i18n::tr("settings.security-keys.ssh.created", "name", "~/.ssh/" + created->name), scale)
+      );
       box->addChild(monoLabel(created->publicKey, scale));
       if (!created->host.empty()) {
         box->addChild(captionLabel(i18n::tr("settings.security-keys.ssh.host-suggest", "host", created->host), scale));
@@ -1080,7 +1105,7 @@ namespace settings {
       auto buttons = buttonRow(scale);
       buttons->addChild(actionButton(
           i18n::tr("settings.security-keys.ssh.copy"), "copy", true, ButtonVariant::Primary, scale,
-          [&manager, text = created->publicKey, copy = actions.copyText]() {
+          [&manager, text = created->publicKey, copy = actions.copyText] {
             if (copy && copy(text)) {
               manager.setStatus(Area::Ssh, i18n::tr("settings.security-keys.ssh.copied"), false);
             }
@@ -1088,7 +1113,7 @@ namespace settings {
       ));
       buttons->addChild(actionButton(
           i18n::tr("settings.security-hardware.close"), {}, true, ButtonVariant::Default, scale,
-          [&manager]() { manager.clearSshCreated(); }
+          [&manager] { manager.clearSshCreated(); }
       ));
       box->addChild(std::move(buttons));
       block.addChild(std::move(box));
@@ -1107,14 +1132,14 @@ namespace settings {
 
     auto buttons = buttonRow(scale);
     buttons->addChild(actionButton(
-        i18n::tr("settings.security-keys.ssh.import"), "download", !busy && residentCapable, ButtonVariant::Primary, scale,
-        [&manager]() { manager.requestSshImport(); }
+        i18n::tr("settings.security-keys.ssh.import"), "download", !busy && residentCapable, ButtonVariant::Primary,
+        scale, [&manager] { manager.requestSshImport(); }
     ));
     buttons->addChild(actionButton(
         i18n::tr("settings.security-keys.ssh.create"), "add", !busy && residentCapable, ButtonVariant::Default, scale,
         actions.openSshCreateSheet
     ));
-    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager]() {
+    buttons->addChild(iconButton("refresh", i18n::tr("settings.security-hardware.refresh"), !busy, scale, [&manager] {
       manager.refresh();
     }));
     block.addChild(std::move(buttons));
@@ -1140,12 +1165,13 @@ namespace settings {
           })
       );
       content->addChild(bodyLabel(
-          i18n::tr(manager.stage() == "touch" ? "settings.security-keys.touch" : "settings.security-keys.working"), scale
+          i18n::tr(manager.stage() == "touch" ? "settings.security-keys.touch" : "settings.security-keys.working"),
+          scale
       ));
       auto buttons = buttonRow(scale);
       buttons->addChild(actionButton(
           i18n::tr("settings.security-hardware.cancel"), {}, true, ButtonVariant::Default, scale,
-          [&manager]() { manager.cancel(); }
+          [&manager] { manager.cancel(); }
       ));
       content->addChild(std::move(buttons));
       body.addChild(std::move(content));
@@ -1162,7 +1188,7 @@ namespace settings {
           i18n::tr("settings.security-keys.pin-retries", "count", std::to_string(device->pinRetries)), scale
       ));
     }
-    const auto submit = [&manager, &pin]() {
+    const auto submit = [&manager, &pin] {
       std::string value = std::move(pin);
       pin.clear();
       manager.submitPin(std::move(value));
@@ -1230,7 +1256,9 @@ namespace settings {
             .fontSize = Style::fontSizeBody * scale,
             .controlHeight = Style::controlHeight * scale,
             .flexGrow = 1.0F,
-            .onSelectionChanged = [&options](std::size_t, std::string_view label) { options.algorithm = std::string(label); },
+            .onSelectionChanged = [&options](std::size_t, std::string_view label) {
+              options.algorithm = std::string(label);
+            },
         })
     );
     content->addChild(captionLabel(i18n::tr("settings.security-keys.ssh.algorithm-hint"), scale));
@@ -1268,11 +1296,10 @@ namespace settings {
           ui::toggle({
               .checked = value,
               .scale = scale,
-              .onChange =
-                  [&value, rebuild](bool checked) {
-                    value = checked;
-                    rebuild();
-                  },
+              .onChange = [&value, rebuild](bool checked) {
+                value = checked;
+                rebuild();
+              },
           })
       );
       content->addChild(std::move(row));

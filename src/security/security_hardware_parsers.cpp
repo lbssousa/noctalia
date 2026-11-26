@@ -1,6 +1,7 @@
 #include "security/security_hardware_parsers.h"
 
 #include "util/base64.h"
+#include "util/string_utils.h"
 
 #include <algorithm>
 #include <array>
@@ -18,10 +19,6 @@ namespace security_hw {
     // The first line of every drop-in this page writes; a drop-in without it is left alone.
     constexpr std::string_view kDropInMarker =
         "# Written by Noctalia (Settings > Security); remove this line to keep your edits.";
-    // What the lbssousa/security-hardware plugin wrote before this page took over: still ours.
-    constexpr std::string_view kLegacyDropInMarker =
-        "# Written by the Noctalia security-hardware plugin (lbssousa/security-hardware); remove this line to keep "
-        "your edits.";
     constexpr std::string_view kIdentity = "    IdentityFile ~/.ssh/";
 
     constexpr std::array<std::pair<std::string_view, std::string_view>, 2> kSkKeyTypes{{
@@ -30,8 +27,8 @@ namespace security_hw {
     }};
 
     constexpr std::array<std::string_view, 8> kGitHosts{
-        "github.com", "gitlab.com",        "bitbucket.org",     "codeberg.org",
-        "git.sr.ht",  "gitea.com",         "ssh.dev.azure.com", "vs-ssh.visualstudio.com",
+        "github.com", "gitlab.com", "bitbucket.org",     "codeberg.org",
+        "git.sr.ht",  "gitea.com",  "ssh.dev.azure.com", "vs-ssh.visualstudio.com",
     };
 
     // libfido2's error names, as pamu2fcfg, fido2-token and ssh-keygen print them.
@@ -56,61 +53,25 @@ namespace security_hw {
         {"returned no keys", "ssh-none"},
     }};
 
-    std::string_view trim(std::string_view text) {
-      const auto first = text.find_first_not_of(" \t\r\n");
-      if (first == std::string_view::npos) {
-        return {};
-      }
-      const auto last = text.find_last_not_of(" \t\r\n");
-      return text.substr(first, last - first + 1);
-    }
+    using StringUtils::splitWhitespace;
 
-    std::vector<std::string> splitOn(std::string_view text, char separator) {
-      std::vector<std::string> parts;
-      std::size_t start = 0;
-      while (true) {
-        const auto end = text.find(separator, start);
-        parts.emplace_back(text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
-        if (end == std::string_view::npos) {
-          return parts;
-        }
-        start = end + 1;
-      }
-    }
+    std::string_view trim(std::string_view text) { return StringUtils::trimRightView(StringUtils::trimLeftView(text)); }
 
-    std::vector<std::string> splitWhitespace(std::string_view text) {
-      std::vector<std::string> out;
-      std::size_t i = 0;
-      while (i < text.size()) {
-        while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])) != 0) {
-          ++i;
-        }
-        const std::size_t start = i;
-        while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])) == 0) {
-          ++i;
-        }
-        if (i > start) {
-          out.emplace_back(text.substr(start, i - start));
-        }
+    // Python's str.splitlines() for the texts here: every line, empty ones included. The views
+    // point into <text>.
+    std::vector<std::string_view> allLines(std::string_view text) {
+      if (text.ends_with('\n')) {
+        text.remove_suffix(1);
       }
-      return out;
-    }
-
-    // Python's str.splitlines() for the texts here: every line, empty ones included.
-    std::vector<std::string> allLines(std::string_view text) {
-      std::vector<std::string> out;
-      std::size_t start = 0;
-      while (start < text.size()) {
-        auto end = text.find('\n', start);
-        if (end == std::string_view::npos) {
-          end = text.size();
+      std::vector<std::string_view> out;
+      if (text.empty()) {
+        return out;
+      }
+      for (auto line : StringUtils::split(text, '\n')) {
+        if (line.ends_with('\r')) {
+          line.remove_suffix(1);
         }
-        std::string line(text.substr(start, end - start));
-        if (!line.empty() && line.back() == '\r') {
-          line.pop_back();
-        }
-        out.push_back(std::move(line));
-        start = end + 1;
+        out.push_back(line);
       }
       return out;
     }
@@ -144,14 +105,17 @@ namespace security_hw {
           return std::nullopt;
         }
         const std::size_t length = (static_cast<std::size_t>(m_data[m_at]) << 24U)
-            | (static_cast<std::size_t>(m_data[m_at + 1]) << 16U) | (static_cast<std::size_t>(m_data[m_at + 2]) << 8U)
+            | (static_cast<std::size_t>(m_data[m_at + 1]) << 16U)
+            | (static_cast<std::size_t>(m_data[m_at + 2]) << 8U)
             | static_cast<std::size_t>(m_data[m_at + 3]);
         const std::size_t begin = m_at + 4;
         if (length > m_data.size() - begin) {
           return std::nullopt;
         }
         m_at = begin + length;
-        return Bytes(m_data.begin() + static_cast<std::ptrdiff_t>(begin), m_data.begin() + static_cast<std::ptrdiff_t>(m_at));
+        return Bytes(
+            m_data.begin() + static_cast<std::ptrdiff_t>(begin), m_data.begin() + static_cast<std::ptrdiff_t>(m_at)
+        );
       }
 
       bool skip(std::size_t count) {
@@ -162,8 +126,8 @@ namespace security_hw {
         return true;
       }
 
-      [[nodiscard]] std::size_t position() const noexcept { return m_at; }
-      [[nodiscard]] bool atEnd() const noexcept { return m_at == m_data.size(); }
+      std::size_t position() const noexcept { return m_at; }
+      bool atEnd() const noexcept { return m_at == m_data.size(); }
 
     private:
       const Bytes& m_data;
@@ -192,8 +156,11 @@ namespace security_hw {
       }
       text += "    IdentitiesOnly yes\n    IdentityAgent none\n";
       if (minutes.has_value() && *minutes != 0) {
-        text += "    ControlMaster auto\n    ControlPath ~/.ssh/" + std::string(kControlDir) + "/%C\n    ControlPersist "
-            + std::to_string(*minutes) + "m\n";
+        text += "    ControlMaster auto\n    ControlPath ~/.ssh/"
+            + std::string(kControlDir)
+            + "/%C\n    ControlPersist "
+            + std::to_string(*minutes)
+            + "m\n";
       } else if (minutes.has_value()) {
         text += "    ControlMaster no\n    ControlPath none\n    ControlPersist no\n";
       }
@@ -212,25 +179,20 @@ namespace security_hw {
 
   } // namespace
 
-  std::vector<std::string> splitLines(std::string_view text) {
-    std::vector<std::string> out;
-    for (auto& line : allLines(text)) {
-      if (!line.empty()) {
-        out.push_back(std::move(line));
-      }
-    }
-    return out;
+  std::vector<std::string_view> splitLines(std::string_view text) {
+    auto lines = allLines(text);
+    std::erase_if(lines, [](std::string_view line) { return line.empty(); });
+    return lines;
   }
 
   std::string lastLine(std::string_view text) {
-    std::string last;
-    for (const auto& line : allLines(text)) {
-      const auto trimmed = trim(line);
-      if (!trimmed.empty()) {
+    std::string_view last;
+    for (const auto line : allLines(text)) {
+      if (const auto trimmed = trim(line); !trimmed.empty()) {
         last = trimmed;
       }
     }
-    return last;
+    return std::string(last);
   }
 
   std::optional<Bytes> decodeBase64Strict(std::string_view text) {
@@ -247,7 +209,7 @@ namespace security_hw {
         ++padding;
         continue;
       }
-      if (padding > 0 || Base64::kChars.find(c) == std::string_view::npos) {
+      if (padding > 0 || !Base64::kChars.contains(c)) {
         return std::nullopt;
       }
     }
@@ -265,8 +227,7 @@ namespace security_hw {
       }
       FidoDevice device;
       device.path = line.substr(0, sep);
-      const std::string rest = line.substr(sep + 2);
-      const auto trimmed = trim(rest);
+      const auto trimmed = trim(line.substr(sep + 2));
       const auto open = trimmed.find('(');
       if (!trimmed.empty() && trimmed.back() == ')' && open != std::string_view::npos) {
         device.name = std::string(trimmed.substr(open + 1, trimmed.size() - open - 2));
@@ -287,7 +248,7 @@ namespace security_hw {
       const auto key = trim(std::string_view(line).substr(0, colon));
       const auto value = colon == std::string::npos ? std::string_view{} : std::string_view(line).substr(colon + 1);
       if (key == "options") {
-        for (const auto& option : splitOn(value, ',')) {
+        for (const auto option : StringUtils::split(value, ',')) {
           const auto name = trim(option);
           if (name == "rk") {
             device.residentKeys = true;
@@ -308,9 +269,9 @@ namespace security_hw {
     if (!line.starts_with(user) || line.size() <= user.size() || line[user.size()] != ':') {
       return out;
     }
-    for (auto& credential : splitOn(line.substr(user.size() + 1), ':')) {
+    for (const auto credential : StringUtils::split(line.substr(user.size() + 1), ':')) {
       if (!credential.empty()) {
-        out.push_back(std::move(credential));
+        out.emplace_back(credential);
       }
     }
     return out;
@@ -403,7 +364,7 @@ namespace security_hw {
   PamU2f parsePamU2f(std::string_view text) {
     for (const auto& raw : splitLines(text)) {
       const auto line = trim(raw);
-      if (line.starts_with('#') || line.find("pam_u2f.so") == std::string_view::npos) {
+      if (line.starts_with('#') || !line.contains("pam_u2f.so")) {
         continue;
       }
       PamU2f state{.u2f = true};
@@ -422,9 +383,7 @@ namespace security_hw {
   }
 
   namespace {
-    std::string normalizePath(std::string_view path) {
-      return std::filesystem::path(path).lexically_normal().string();
-    }
+    std::string normalizePath(std::string_view path) { return std::filesystem::path(path).lexically_normal().string(); }
   } // namespace
 
   bool pamUsesFile(const std::vector<PamU2f>& services, std::string_view path, std::string_view own) {
@@ -456,11 +415,11 @@ namespace security_hw {
 
   std::string fidoErrorCode(std::string_view text, bool pinGiven) {
     // Asked for a PIN it wasn't given (pamu2fcfg then fails on the empty one).
-    if (!pinGiven && text.find("Enter PIN") != std::string_view::npos) {
+    if (!pinGiven && text.contains("Enter PIN")) {
       return "pin-required";
     }
     for (const auto& [needle, code] : kFidoErrors) {
-      if (text.find(needle) != std::string_view::npos) {
+      if (text.contains(needle)) {
         return std::string(code);
       }
     }
@@ -470,21 +429,21 @@ namespace security_hw {
   // -- OpenPGP ----------------------------------------------------------------------------------
 
   bool secretOnDisk(std::string_view colons) {
-    for (const auto& line : splitLines(colons)) {
-      const auto fields = splitOn(line, ':');
-      if (fields.front() == "sec" || fields.front() == "ssb") {
-        const std::string token = fields.size() > 14 ? fields[14] : std::string{};
-        if (token.empty() || token == "+") {
-          return true;
-        }
+    return std::ranges::any_of(splitLines(colons), [](std::string_view line) {
+      const auto fields = StringUtils::split(line, ':');
+      if (fields.front() != "sec" && fields.front() != "ssb") {
+        return false;
       }
-    }
-    return false;
+      const std::string_view token = fields.size() > 14 ? fields[14] : std::string_view{};
+      return token.empty() || token == "+";
+    });
   }
 
   std::string formatFingerprint(std::string_view fpr) {
     std::string hex(fpr);
-    std::ranges::transform(hex, hex.begin(), [](char c) { return static_cast<char>(std::toupper(static_cast<unsigned char>(c))); });
+    std::ranges::transform(hex, hex.begin(), [](char c) {
+      return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    });
     if (hex.size() != 40) {
       return hex;
     }
@@ -574,7 +533,10 @@ namespace security_hw {
       return std::nullopt;
     }
     const std::size_t at = reader.position();
-    if (at + 4 > data->size() || (*data)[at] != 0 || (*data)[at + 1] != 0 || (*data)[at + 2] != 0
+    if (at + 4 > data->size()
+        || (*data)[at] != 0
+        || (*data)[at + 1] != 0
+        || (*data)[at + 2] != 0
         || (*data)[at + 3] != 1) {
       return std::nullopt; // exactly one key
     }
@@ -654,12 +616,12 @@ namespace security_hw {
     std::string_view rest = name.substr(prefix.size());
     const std::string_view app = application.starts_with("ssh:") ? application.substr(4) : application;
     if (!app.empty()) {
-      if (!rest.starts_with("_") || !rest.substr(1).starts_with(app)) {
+      if (!rest.starts_with('_') || !rest.substr(1).starts_with(app)) {
         return {};
       }
       rest = rest.substr(app.size() + 1);
     }
-    return rest.starts_with("_") ? std::string(rest.substr(1)) : std::string{};
+    return rest.starts_with('_') ? std::string(rest.substr(1)) : std::string{};
   }
 
   std::string sshCreateProblem(const SshCreateOptions& options) {
@@ -669,11 +631,10 @@ namespace security_hw {
       return "algorithm";
     }
     if (!options.application.empty()
-        && (!std::regex_match(options.application, kApplication) || options.application.find("..") != std::string::npos)) {
+        && (!std::regex_match(options.application, kApplication) || options.application.contains(".."))) {
       return "application";
     }
-    if (!options.user.empty()
-        && (!std::regex_match(options.user, kUser) || options.user.find("..") != std::string::npos)) {
+    if (!options.user.empty() && (!std::regex_match(options.user, kUser) || options.user.contains(".."))) {
       return "user";
     }
     // ssh-keygen -K would skip a handle named like a public half.
@@ -681,7 +642,8 @@ namespace security_hw {
       return "pub-name";
     }
     // The .pub file carries the comment; keep it plain ASCII.
-    if (options.comment.size() > 128 || !std::ranges::all_of(options.comment, [](char c) { return c >= ' ' && c <= '~'; })) {
+    if (options.comment.size() > 128
+        || !std::ranges::all_of(options.comment, [](char c) { return c >= ' ' && c <= '~'; })) {
       return "comment";
     }
     return {};
@@ -719,7 +681,9 @@ namespace security_hw {
       return std::nullopt;
     }
     std::string host = match[2].str();
-    std::ranges::transform(host, host.begin(), [](char c) { return static_cast<char>(std::tolower(static_cast<unsigned char>(c))); });
+    std::ranges::transform(host, host.begin(), [](char c) {
+      return static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    });
     std::string port;
     if (match[3].matched) {
       const auto value = parseInt(match[3].str());
@@ -730,10 +694,9 @@ namespace security_hw {
     }
     bool known = std::ranges::contains(kGitHosts, std::string_view(host));
     if (!known) {
-      const auto labels = splitOn(host, '.');
-      known = std::any_of(labels.begin(), labels.end() - 1, [](const std::string& label) {
-        return label.find("git") != std::string::npos;
-      });
+      const auto labels = StringUtils::split(host, '.');
+      known =
+          std::any_of(labels.begin(), labels.end() - 1, [](std::string_view label) { return label.contains("git"); });
     }
     if (!known) {
       return std::nullopt;
@@ -749,7 +712,7 @@ namespace security_hw {
 
   DropIn parseDropIn(std::string_view text) {
     const auto lines = allLines(text);
-    if (lines.empty() || (lines.front() != kDropInMarker && lines.front() != kLegacyDropInMarker)) {
+    if (lines.empty() || lines.front() != kDropInMarker) {
       return {.kind = DropInKind::Foreign};
     }
     static const std::regex kMinutes("([1-9][0-9]{0,3})m");
@@ -777,7 +740,9 @@ namespace security_hw {
         }
       }
     }
-    if (found.remote.host.empty() || found.remote.login.empty() || invalidMinutes
+    if (found.remote.host.empty()
+        || found.remote.login.empty()
+        || invalidMinutes
         || (found.minutes.has_value() && !validPersistMinutes(*found.minutes))
         || dropInWith(lines.front(), found.names, found.remote, found.minutes) != text) {
       found.kind = DropInKind::Edited;
@@ -787,9 +752,9 @@ namespace security_hw {
   }
 
   bool includesDropIns(std::string_view config) {
-    static const std::regex kInclude("^\\s*include\\s+\\S*config\\.d/", std::regex::icase);
-    return std::ranges::any_of(allLines(config), [](const std::string& line) {
-      return std::regex_search(line, kInclude);
+    static const std::regex kInclude(R"(^\s*include\s+\S*config\.d/)", std::regex::icase);
+    return std::ranges::any_of(allLines(config), [](std::string_view line) {
+      return std::regex_search(line.begin(), line.end(), kInclude);
     });
   }
 

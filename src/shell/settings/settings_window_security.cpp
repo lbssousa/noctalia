@@ -1,18 +1,19 @@
-#include "shell/wayland/clipboard_service.h"
 #include "config/config_types.h"
 #include "core/deferred_call.h"
 #include "i18n/i18n.h"
 #include "security/fingerprint_manager.h"
 #include "security/security_key_manager.h"
+#include "shell/dialogs/file_dialog.h"
 #include "shell/settings/settings_security_hardware.h"
 #include "shell/settings/settings_window.h"
+#include "shell/wayland/clipboard_service.h"
 #include "ui/controls/flex.h"
 #include "ui/controls/input.h"
-#include "shell/dialogs/file_dialog.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <optional>
+#include <sodium.h>
 #include <utility>
 
 void SettingsWindow::setSecurityHardware(FingerprintManager* fingerprints, SecurityKeyManager* securityKeys) {
@@ -24,8 +25,8 @@ void SettingsWindow::setSecurityHardware(FingerprintManager* fingerprints, Secur
   }
   m_fingerprints = fingerprints;
   m_securityKeys = securityKeys;
-  // Both managers report every state change; redraw the page and any open sheet.
-  const auto onChanged = [this]() {
+  // Both managers report every state change: redraw the page and any open sheet.
+  const auto onChanged = [this] {
     if (isOpen()) {
       requestContentRebuild(/*refreshRegistry=*/false, /*refreshFilterRow=*/false, /*rebuildEditorSheet=*/true);
     }
@@ -34,11 +35,11 @@ void SettingsWindow::setSecurityHardware(FingerprintManager* fingerprints, Secur
     m_fingerprints->setChangedCallback(onChanged);
   }
   if (m_securityKeys != nullptr) {
-    m_securityKeys->setChangedCallback([this, onChanged]() {
+    m_securityKeys->setChangedCallback([this, onChanged] {
       onChanged();
       // Opening or closing a sheet from inside a click handler would destroy the button being
       // clicked: do it on the next turn of the loop.
-      DeferredCall::callLater([this, alive = std::weak_ptr<void>(m_securityAlive)]() {
+      DeferredCall::callLater([this, alive = std::weak_ptr<void>(m_securityAlive)] {
         if (!alive.expired()) {
           syncSecurityKeyPinSheet();
         }
@@ -49,21 +50,21 @@ void SettingsWindow::setSecurityHardware(FingerprintManager* fingerprints, Secur
 
 settings::SecurityHardwareActions SettingsWindow::securityHardwareActions(const Config& cfg) {
   return settings::SecurityHardwareActions{
-      .requestRebuild = [this]() { requestContentRebuild(); },
-      .openFingerprintEnrollSheet = [this]() { openFingerprintEnrollSheet(); },
-      .browseGpgPublicKey = [this]() { browseGpgPublicKey(); },
-      .openSshCreateSheet = [this]() { openSshCreateSheet(); },
-      .copyText = [this](const std::string& text) {
-        return m_clipboardService != nullptr && m_clipboardService->copyText(text);
-      },
+      .requestRebuild = [this] { requestContentRebuild(); },
+      .openFingerprintEnrollSheet = [this] { openFingerprintEnrollSheet(); },
+      .browseGpgPublicKey = [this] { browseGpgPublicKey(); },
+      .openSshCreateSheet = [this] { openSshCreateSheet(); },
+      .copyText = [this](
+                      const std::string& text
+                  ) { return m_clipboardService != nullptr && m_clipboardService->copyText(text); },
       .offline = cfg.shell.offlineMode,
   };
 }
 
 void SettingsWindow::insertSecurityHardwareEntries(const Config& cfg) {
   std::vector<settings::SettingEntry> entries;
-  const auto entry = [&](std::string group, std::string titleKey, std::string subtitleKey, std::string searchText,
-                         std::function<void(Flex&)> build) {
+  const auto entry = [&](std::string group, const std::string& titleKey, const std::string& subtitleKey,
+                         std::string searchText, std::function<void(Flex&)> build) {
     entries.push_back(
         settings::SettingEntry{
             .section = settings::SettingsSection::Security,
@@ -89,10 +90,10 @@ void SettingsWindow::insertSecurityHardwareEntries(const Config& cfg) {
     );
   }
 
-  if (m_securityKeys != nullptr && SecurityKeyManager::fido2ToolsAvailable()) {
+  if (m_securityKeys != nullptr && m_securityKeys->fido2ToolsAvailable()) {
     entry(
         "security-keys", "settings.security-keys.fido.label", "settings.security-keys.fido.description",
-        "security key yubikey fido2 u2f pam_u2f register token sudo polkit chave login",
+        "security key yubikey fido2 u2f pam_u2f register token sudo polkit login chave",
         [this, actions = securityHardwareActions(cfg)](Flex& block) {
           if (m_securityKeys != nullptr) {
             settings::buildFido2Block(block, *m_securityKeys, m_securityHardwareState, actions, uiScale());
@@ -101,7 +102,7 @@ void SettingsWindow::insertSecurityHardwareEntries(const Config& cfg) {
     );
   }
 
-  if (m_securityKeys != nullptr && SecurityKeyManager::gpgAvailable()) {
+  if (m_securityKeys != nullptr && m_securityKeys->gpgAvailable()) {
     entry(
         "security-keys", "settings.security-keys.gpg.label", "settings.security-keys.gpg.description",
         "gpg gnupg openpgp smartcard card yubikey public key import stub trust cartão",
@@ -113,7 +114,7 @@ void SettingsWindow::insertSecurityHardwareEntries(const Config& cfg) {
     );
   }
 
-  if (m_securityKeys != nullptr && SecurityKeyManager::sshAvailable()) {
+  if (m_securityKeys != nullptr && m_securityKeys->sshAvailable()) {
     entry(
         "security-keys", "settings.security-keys.ssh.label", "settings.security-keys.ssh.description",
         "ssh resident key yubikey fido2 sk ed25519-sk ecdsa-sk github git import ssh-keygen chave residente",
@@ -129,9 +130,9 @@ void SettingsWindow::insertSecurityHardwareEntries(const Config& cfg) {
     return;
   }
 
-  // Right after the authentication group, ahead of the lock screen settings.
+  // Right after the authentication group (polkit), ahead of the privacy settings.
   auto it = std::ranges::find_if(m_settingsRegistry, [](const settings::SettingEntry& e) {
-    return e.section == settings::SettingsSection::Security && e.group == "lock-screen";
+    return e.section == settings::SettingsSection::Security && e.group == "privacy";
   });
   if (it == m_settingsRegistry.end()) {
     const auto last = std::ranges::find_last_if(m_settingsRegistry, [](const settings::SettingEntry& e) {
@@ -146,20 +147,8 @@ void SettingsWindow::openFingerprintEnrollSheet() {
   if (m_fingerprints == nullptr || m_fingerprints->busy()) {
     return;
   }
-  if (m_editorSheetModal != nullptr && m_editorSheetModal->isOpen()) {
-    m_editorSheetModal->close();
-  }
-  if (m_editorSheetModal == nullptr) {
-    m_editorSheetModal = std::make_unique<settings::SettingsSheetModal>();
-    m_editorSheetModal->initialize(m_modalHost, [this]() { dismissOpenSelectDropdown(); });
-  }
+  const auto close = prepareSecuritySheet(SecuritySheet::Fingerprint);
   m_fingerprints->resetEnrollment();
-
-  const auto close = [this]() {
-    if (m_editorSheetModal != nullptr) {
-      m_editorSheetModal->close();
-    }
-  };
   const float scale = uiScale();
   m_editorSheetModal->open(
       settings::SettingsSheetRequest{
@@ -174,7 +163,8 @@ void SettingsWindow::openFingerprintEnrollSheet() {
           .minWidth = 480.0F,
           .maxWidth = 640.0F,
           .onClosed =
-              [this]() {
+              [this] {
+                m_securitySheet = SecuritySheet::None;
                 if (m_fingerprints != nullptr) {
                   if (m_fingerprints->mode() == FingerprintManager::Mode::Enrolling) {
                     m_fingerprints->cancel();
@@ -209,24 +199,8 @@ void SettingsWindow::openSecurityKeyPinSheet() {
   if (m_securityKeys == nullptr || !m_securityKeys->pinPrompt().has_value()) {
     return;
   }
-  if (m_editorSheetModal != nullptr && m_editorSheetModal->isOpen()) {
-    m_closingSecuritySheet = true;
-    m_editorSheetModal->close();
-    m_closingSecuritySheet = false;
-  }
-  if (m_editorSheetModal == nullptr) {
-    m_editorSheetModal = std::make_unique<settings::SettingsSheetModal>();
-    m_editorSheetModal->initialize(m_modalHost, [this]() { dismissOpenSelectDropdown(); });
-  }
-  std::ranges::fill(m_securityKeyPin, '\0');
-  m_securityKeyPin.clear();
-  m_securitySheet = SecuritySheet::Pin;
-
-  const auto close = [this]() {
-    if (m_editorSheetModal != nullptr) {
-      m_editorSheetModal->close();
-    }
-  };
+  const auto close = prepareSecuritySheet(SecuritySheet::Pin);
+  wipeSecurityKeyPin();
   const float scale = uiScale();
   std::string title = i18n::tr("settings.security-keys.pin-title");
   m_editorSheetModal->open(
@@ -244,11 +218,10 @@ void SettingsWindow::openSecurityKeyPinSheet() {
           .minWidth = 420.0F,
           .maxWidth = 560.0F,
           .onClosed =
-              [this]() {
+              [this] {
                 m_securityPinInput = nullptr;
                 // Never keep the PIN around once the sheet is gone.
-                std::ranges::fill(m_securityKeyPin, '\0');
-                m_securityKeyPin.clear();
+                wipeSecurityKeyPin();
                 m_securitySheet = SecuritySheet::None;
                 if (!m_closingSecuritySheet && m_securityKeys != nullptr) {
                   // Closed by the user: drop the prompt, or stop the operation waiting for the key.
@@ -260,10 +233,9 @@ void SettingsWindow::openSecurityKeyPinSheet() {
                 }
                 requestContentRebuild();
               },
-          .initialFocusArea =
-              [this]() -> InputArea* {
-                return m_securityPinInput != nullptr ? m_securityPinInput->inputArea() : nullptr;
-              },
+          .initialFocusArea = [this] -> InputArea* {
+            return m_securityPinInput != nullptr ? m_securityPinInput->inputArea() : nullptr;
+          },
       }
   );
 }
@@ -272,28 +244,15 @@ void SettingsWindow::openSshCreateSheet() {
   if (m_securityKeys == nullptr || m_securityKeys->busy()) {
     return;
   }
-  if (m_editorSheetModal != nullptr && m_editorSheetModal->isOpen()) {
-    m_editorSheetModal->close();
-  }
-  if (m_editorSheetModal == nullptr) {
-    m_editorSheetModal = std::make_unique<settings::SettingsSheetModal>();
-    m_editorSheetModal->initialize(m_modalHost, [this]() { dismissOpenSelectDropdown(); });
-  }
+  const auto close = prepareSecuritySheet(SecuritySheet::SshCreate);
   m_sshCreateForm = settings::SshCreateForm{.options = m_securityKeys->sshDefaults(), .problem = {}};
   m_securityKeys->clearSshCreated();
-  m_securitySheet = SecuritySheet::SshCreate;
-
-  const auto close = [this]() {
-    if (m_editorSheetModal != nullptr) {
-      m_editorSheetModal->close();
-    }
-  };
-  const auto rebuild = [this]() {
+  const auto rebuild = [this] {
     if (m_editorSheetModal != nullptr) {
       m_editorSheetModal->rebuildBody();
     }
   };
-  const auto submit = [this]() { submitSshCreateSheet(); };
+  const auto submit = [this] { submitSshCreateSheet(); };
   const float scale = uiScale();
   m_editorSheetModal->open(
       settings::SettingsSheetRequest{
@@ -306,7 +265,7 @@ void SettingsWindow::openSshCreateSheet() {
           .minWidth = 520.0F,
           .maxWidth = 680.0F,
           .onClosed =
-              [this]() {
+              [this] {
                 m_securitySheet = SecuritySheet::None;
                 requestContentRebuild();
               },
@@ -329,7 +288,7 @@ void SettingsWindow::submitSshCreateSheet() {
   }
   auto options = m_sshCreateForm.options;
   options.replace = false;
-  DeferredCall::callLater([this, options, alive = std::weak_ptr<void>(m_securityAlive)]() {
+  DeferredCall::callLater([this, options, alive = std::weak_ptr<void>(m_securityAlive)] {
     if (alive.expired() || m_securityKeys == nullptr) {
       return;
     }
@@ -365,8 +324,33 @@ void SettingsWindow::stopSecurityHardware() {
     m_securityKeys->cancelPin();
     m_securityKeys->cancel();
   }
-  std::ranges::fill(m_securityKeyPin, '\0');
-  m_securityKeyPin.clear();
+  wipeSecurityKeyPin();
   m_securitySheet = SecuritySheet::None;
   m_securityHardwareState = {};
+}
+
+std::function<void()> SettingsWindow::prepareSecuritySheet(SecuritySheet sheet) {
+  if (m_editorSheetModal != nullptr && m_editorSheetModal->isOpen()) {
+    // Replaced, not dismissed by the user: its onClosed must not cancel anything.
+    m_closingSecuritySheet = true;
+    m_editorSheetModal->close();
+    m_closingSecuritySheet = false;
+  }
+  if (m_editorSheetModal == nullptr) {
+    m_editorSheetModal = std::make_unique<settings::SettingsSheetModal>();
+    m_editorSheetModal->initialize(m_modalHost, [this] { dismissOpenSelectDropdown(); });
+  }
+  m_securitySheet = sheet;
+  return [this] {
+    if (m_editorSheetModal != nullptr) {
+      m_editorSheetModal->close();
+    }
+  };
+}
+
+void SettingsWindow::wipeSecurityKeyPin() {
+  if (!m_securityKeyPin.empty()) {
+    sodium_memzero(m_securityKeyPin.data(), m_securityKeyPin.size());
+  }
+  m_securityKeyPin.clear();
 }
