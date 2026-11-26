@@ -9,7 +9,7 @@
 #include "ui/controls/glyph.h"
 #include "ui/controls/input.h"
 #include "ui/controls/label.h"
-#include "ui/controls/progress_bar.h"
+#include "ui/controls/ring.h"
 #include "ui/controls/select.h"
 #include "ui/controls/toggle.h"
 #include "ui/palette.h"
@@ -28,6 +28,12 @@ namespace settings {
 
     using Op = SecurityKeyManager::Op;
     using Area = SecurityKeyManager::Area;
+
+    // Same glyph size as the polkit panel's and the lock screen's fingerprint cue.
+    constexpr float kCueGlyphSize = 72.0F;
+    // Enrollment ring around that glyph.
+    constexpr float kEnrollRingSize = 112.0F;
+    constexpr float kEnrollRingThickness = 4.0F;
 
     // Connection reuse choices for a git host, in minutes (0: authenticate every connection).
     constexpr std::array<int, 9> kPersistChoices{0, 5, 15, 30, 60, 120, 240, 480, 1440};
@@ -68,6 +74,34 @@ namespace settings {
           .fontWeight = FontWeight::Bold,
           .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
       });
+    }
+
+    // The fingerprint glyph inside a ring that fills clockwise as the reader accepts scans.
+    std::unique_ptr<Flex> fingerprintProgressIndicator(float progress, ColorRole role, float scale) {
+      const float size = kEnrollRingSize * scale;
+      auto indicator = ui::column({
+          .align = FlexAlign::Center,
+          .justify = FlexJustify::Center,
+          .minWidth = size,
+          .minHeight = size,
+          .maxWidth = size,
+          .maxHeight = size,
+      });
+      auto ring = std::make_unique<Ring>();
+      ring->setParticipatesInLayout(false);
+      ring->setSize(size, size);
+      ring->setThickness(kEnrollRingThickness * scale);
+      ring->setFill(colorSpecFromRole(role));
+      ring->setProgress(progress);
+      indicator->addChild(std::move(ring));
+      indicator->addChild(
+          ui::glyph({
+              .glyph = "fingerprint",
+              .glyphSize = kCueGlyphSize * scale,
+              .color = colorSpecFromRole(role),
+          })
+      );
+      return indicator;
     }
 
     void addStatus(Flex& parent, const std::string& message, bool error, float scale) {
@@ -501,13 +535,14 @@ namespace settings {
       return;
     }
 
-    // Step 2: enrollment progress.
+    // Step 2: enrollment progress, drawn like the polkit panel's and the lock screen's fingerprint cue.
     content->addChild(
         ui::label({
             .text = FingerprintManager::fingerLabel(manager.enrollFinger()),
             .fontSize = Style::fontSizeTitle * scale,
             .fontWeight = FontWeight::Bold,
             .color = colorSpecFromRole(ColorRole::OnSurface),
+            .textAlign = TextAlign::Center,
         })
     );
 
@@ -519,22 +554,24 @@ namespace settings {
     } else if (total > 0) {
       progress = std::clamp(static_cast<float>(done) / static_cast<float>(total), 0.0F, 1.0F);
     }
-    content->addChild(
-        ui::progressBar({
-            .progress = progress,
-            .height = Style::spaceSm * scale,
-            .flexGrow = 0.0F,
-        })
-    );
+    const bool failed = finished && !manager.enrollCompleted();
+
+    auto indicator = ui::column({.align = FlexAlign::Center, .gap = Style::spaceSm * scale, .fillWidth = true});
+    indicator->addChild(fingerprintProgressIndicator(progress, failed ? ColorRole::Error : ColorRole::Primary, scale));
     if (total > 0) {
-      content->addChild(captionLabel(
-          i18n::tr(
-              "settings.fingerprint.stages", "done", std::to_string(std::min(done, total)), "total",
-              std::to_string(total)
-          ),
-          scale
-      ));
+      indicator->addChild(
+          ui::label({
+              .text = i18n::tr(
+                  "settings.fingerprint.stages", "done", std::to_string(std::min(done, total)), "total",
+                  std::to_string(total)
+              ),
+              .fontSize = Style::fontSizeCaption * scale,
+              .color = colorSpecFromRole(ColorRole::OnSurfaceVariant),
+              .textAlign = TextAlign::Center,
+          })
+      );
     }
+    content->addChild(std::move(indicator));
     addStatus(*content, manager.status(), manager.statusIsError(), scale);
 
     auto buttons = buttonRow(scale);
