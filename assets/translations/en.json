@@ -1451,6 +1451,11 @@
         "right-ring": "Right ring finger",
         "right-thumb": "Right thumb"
       },
+      "finger-short": {
+        "index": "Index",
+        "middle": "Middle",
+        "thumb": "Thumb"
+      },
       "label": "Fingerprint Reader",
       "left-hand": "Left hand",
       "no-reader": "No fingerprint reader found",

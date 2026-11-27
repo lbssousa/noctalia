@@ -505,25 +505,33 @@ namespace settings {
     const bool finished = !enrolling && !manager.enrollFinger().empty();
 
     if (!enrolling && !finished) {
-      // Step 1: pick a finger, right hand first, like GNOME Settings.
+      // Step 1: pick a finger. One column per hand, laid out as the hands sit palms down: left
+      // hand on the left. The column heading names the hand, so the buttons carry the short name.
       content->addChild(bodyLabel(i18n::tr("settings.fingerprint.choose-finger"), scale));
+      static constexpr std::array<const char*, 3> kShortKeys{
+          "settings.fingerprint.finger-short.thumb",
+          "settings.fingerprint.finger-short.index",
+          "settings.fingerprint.finger-short.middle",
+      };
       const auto& fingers = FingerprintManager::selectableFingers();
+      auto hands = ui::row({.align = FlexAlign::Start, .gap = Style::spaceSm * scale, .fillWidth = true});
       const auto addHand = [&](const std::string& title, std::size_t first) {
-        content->addChild(sectionLabel(title, scale));
-        auto row = buttonRow(scale);
-        for (std::size_t i = first; i < first + 3 && i < fingers.size(); ++i) {
-          const std::string& finger = fingers[i];
+        auto column = ui::column({.align = FlexAlign::Stretch, .gap = Style::spaceXs * scale, .flexGrow = 1.0F});
+        column->addChild(sectionLabel(title, scale));
+        for (std::size_t i = 0; i < kShortKeys.size() && first + i < fingers.size(); ++i) {
+          const std::string& finger = fingers[first + i];
           const bool enrolled = std::ranges::contains(manager.enrolledFingers(), finger);
-          row->addChild(actionButton(
-              FingerprintManager::fingerLabel(finger), enrolled ? "check" : "fingerprint", !enrolled,
-              ButtonVariant::Outline, scale, [&manager, finger] { manager.startEnroll(finger); }
+          column->addChild(actionButton(
+              i18n::tr(kShortKeys[i]), enrolled ? "check" : "fingerprint", !enrolled, ButtonVariant::Outline, scale,
+              [&manager, finger] { manager.startEnroll(finger); }
           ));
         }
-        content->addChild(std::move(row));
+        hands->addChild(std::move(column));
       };
-      addHand(i18n::tr("settings.fingerprint.right-hand"), 0);
       addHand(i18n::tr("settings.fingerprint.left-hand"), 3);
-      auto buttons = buttonRow(scale);
+      addHand(i18n::tr("settings.fingerprint.right-hand"), 0);
+      content->addChild(std::move(hands));
+      auto buttons = ui::row({.align = FlexAlign::Center, .justify = FlexJustify::End, .fillWidth = true});
       buttons->addChild(
           actionButton(i18n::tr("settings.security-hardware.cancel"), {}, true, ButtonVariant::Default, scale, close)
       );

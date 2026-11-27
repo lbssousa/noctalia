@@ -1451,6 +1451,11 @@
         "right-ring": "Anelar direito",
         "right-thumb": "Polegar direito"
       },
+      "finger-short": {
+        "index": "Indicador",
+        "middle": "Médio",
+        "thumb": "Polegar"
+      },
       "label": "Leitor de Impressão Digital",
       "left-hand": "Mão esquerda",
       "no-reader": "Nenhum leitor de impressão digital encontrado",

@@ -160,8 +160,8 @@ void SettingsWindow::openFingerprintEnrollSheet() {
                 }
               },
           .scale = scale,
-          .minWidth = 480.0F,
-          .maxWidth = 640.0F,
+          .minWidth = 340.0F,
+          .maxWidth = 340.0F,
           .onClosed =
               [this] {
                 m_securitySheet = SecuritySheet::None;
